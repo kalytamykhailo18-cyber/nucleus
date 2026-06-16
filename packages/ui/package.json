@@ -1,0 +1,6 @@
+{
+  "name": "@nucleus/ui",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared React components and design tokens (placeholder until step 3)"
+}

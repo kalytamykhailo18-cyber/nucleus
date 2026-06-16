@@ -1,0 +1,6 @@
+{
+  "name": "@nucleus/auth",
+  "version": "0.0.1",
+  "private": true,
+  "description": "JWT + session utilities, shared between web and worker (placeholder until step 2)"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "@nucleus/eview",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Eview MQTT + REST client (placeholder until step 6)"
+}

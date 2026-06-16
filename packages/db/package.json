@@ -1,0 +1,6 @@
+{
+  "name": "@nucleus/db",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Prisma schema + client (placeholder until step 2)"
+}

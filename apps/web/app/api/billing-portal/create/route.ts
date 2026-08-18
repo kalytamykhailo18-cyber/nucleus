@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import { prisma } from '@/lib/db';
 import { env } from '@/lib/env';
 import { stripe } from '@/lib/stripe';
@@ -23,11 +23,9 @@ import { stripe } from '@/lib/stripe';
 export const dynamic = 'force-dynamic';
 
 export async function POST(): Promise<NextResponse> {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },

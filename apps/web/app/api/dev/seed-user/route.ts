@@ -19,7 +19,9 @@ const schema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(1024),
   fullName: z.string().min(1).max(255).nullable().optional(),
-  role: z.enum(['USER', 'ADMIN']).optional(),
+  // 2026-06-30: SALES added so admin-sales-demo.spec can seed a
+  // SALES rep to exercise the loosened demo-create guard.
+  role: z.enum(['USER', 'ADMIN', 'CALLCENTER', 'SALES']).optional(),
 });
 
 export async function POST(request: NextRequest) {

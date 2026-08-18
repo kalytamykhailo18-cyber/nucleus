@@ -32,6 +32,10 @@ export async function GET(request: NextRequest) {
     planRaw === 'ANGELA_ESENCIAL' || planRaw === 'ANGELA_TOTAL'
       ? planRaw
       : undefined;
+  const vistaRaw = params.get('vista');
+  const strict = vistaRaw === 'real';
+  const sourceRaw = params.get('source');
+  const source = sourceRaw && sourceRaw.length > 0 ? sourceRaw : undefined;
 
   // CSV export bypasses pagination — pull every matching row in one go.
   // The page-size ceiling is intentionally generous; the count query
@@ -41,6 +45,8 @@ export async function GET(request: NextRequest) {
       planType,
       fromIso: params.get('from') ?? undefined,
       toIso: params.get('to') ?? undefined,
+      strict,
+      source,
     },
     1,
     1_000_000,

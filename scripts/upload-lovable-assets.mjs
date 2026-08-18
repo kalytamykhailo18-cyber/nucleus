@@ -16,7 +16,7 @@ if (!cloud || !apiKey || !apiSecret) {
   process.exit(1);
 }
 
-const SRC = '/home/ssm-user/project/overview/lovable-assets/mirror';
+const SRC = '/home/ssm-user/sensu-overview-backup-2026-08-01/lovable-assets/mirror';
 const FOLDER = 'sensu/landing';
 
 function signParams(params, secret) {
@@ -78,6 +78,6 @@ for (const f of files.sort()) {
   }
 }
 
-const outPath = '/home/ssm-user/project/overview/lovable-assets/cloudinary-manifest.json';
+const outPath = '/home/ssm-user/sensu-overview-backup-2026-08-01/lovable-assets/cloudinary-manifest.json';
 await writeFile(outPath, JSON.stringify(manifest, null, 2));
 console.log(`\nmanifest saved to ${outPath}`);

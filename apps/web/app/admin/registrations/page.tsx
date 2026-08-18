@@ -1,9 +1,14 @@
 import Link from 'next/link';
-import { LuClipboardList, LuDownload, LuLink2, LuArrowRight } from 'react-icons/lu';
+import { LuClipboardList, LuDownload, LuCircleCheck, LuClock } from 'react-icons/lu';
+import { ResendWelcomeButton } from './resend-welcome-button';
 import { requireAdmin, fetchRegistrations } from '@/lib/admin';
+import { resolveStrictAdminView } from '@/lib/admin-view';
+import { prisma } from '@/lib/db';
 import { SectionLabel } from '@/components/section-label';
 import { PaginationNav } from '@/components/pagination-nav';
 import { cadenceLabel, type BillingCadence } from '@/lib/plans';
+import { CrearDemoButton } from './crear-demo-button';
+import { LuFilter, LuFilterX } from 'react-icons/lu';
 
 const PAGE_SIZE = 50;
 
@@ -11,6 +16,7 @@ const STATUS_TONE: Record<string, string> = {
   ACTIVE: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   PENDING_PAYMENT: 'bg-amber-50 text-amber-700 ring-amber-200',
   PAST_DUE: 'bg-rose-50 text-rose-700 ring-rose-200',
+  PAUSED: 'bg-sky-50 text-sky-700 ring-sky-200',
   CANCELLED: 'bg-zinc-100 text-zinc-600 ring-zinc-200',
 };
 
@@ -45,7 +51,7 @@ function formatRenewal(iso: string | null): string {
 export default async function AdminRegistrationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ plan?: string; from?: string; to?: string; page?: string }>;
+  searchParams: Promise<{ plan?: string; from?: string; to?: string; page?: string; vista?: string; source?: string }>;
 }) {
   await requireAdmin();
   const params = await searchParams;
@@ -53,6 +59,19 @@ export default async function AdminRegistrationsPage({
     params.plan === 'ANGELA_ESENCIAL' || params.plan === 'ANGELA_TOTAL'
       ? params.plan
       : undefined;
+  // Juan 2026-06-25 — CRM segment filter. `(none)` is the reserved
+  // tag for users with a null signupSource. Empty string == no filter.
+  const sourceFilter =
+    typeof params.source === 'string' && params.source.length > 0
+      ? params.source
+      : undefined;
+  // Juan 2026-06-23 (B.2): ?vista=real flips the row filter to strict
+  // mode, hiding the seeded demo+ / demo@ rows so the admin sees only
+  // real customers. Lenient (default) preserves the Playwright suite's
+  // Juan 2026-06-23 follow-up: strict is now the DEFAULT — see
+  // resolveStrictAdminView. Playwright global-setup writes the
+  // opt-out cookie so the spec suite still sees seeded demo rows.
+  const strictView = await resolveStrictAdminView(params.vista);
   const pageNumber = (() => {
     const n = Number(params.page);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
@@ -62,22 +81,42 @@ export default async function AdminRegistrationsPage({
       planType,
       fromIso: params.from,
       toIso: params.to,
+      strict: strictView,
+      source: sourceFilter,
     },
     pageNumber,
     PAGE_SIZE,
   );
 
+  // Universe of distinct signupSource values currently in the DB so
+  // the dropdown only ever offers tags Juan can actually click. Skips
+  // null/empty values; we render the synthetic `(sin etiqueta)` chip
+  // separately below.
+  const sourceUniverseRows = await prisma.user.findMany({
+    where: { signupSource: { not: null } },
+    distinct: ['signupSource'],
+    select: { signupSource: true },
+    orderBy: { signupSource: 'asc' },
+  });
+  const sourceUniverse = sourceUniverseRows
+    .map((r) => r.signupSource)
+    .filter((s): s is string => Boolean(s));
+
   const exportQuery = new URLSearchParams();
   if (planType) exportQuery.set('plan', planType);
   if (params.from) exportQuery.set('from', params.from);
   if (params.to) exportQuery.set('to', params.to);
+  if (strictView) exportQuery.set('vista', 'real');
+  if (sourceFilter) exportQuery.set('source', sourceFilter);
 
   // Build the pagination base href so chip clicks preserve the active
   // filters; PaginationNav writes its own `page` param onto this.
   const baseHrefParams = new URLSearchParams();
   if (planType) baseHrefParams.set('plan', planType);
+  if (strictView) baseHrefParams.set('vista', 'real');
   if (params.from) baseHrefParams.set('from', params.from);
   if (params.to) baseHrefParams.set('to', params.to);
+  if (sourceFilter) baseHrefParams.set('source', sourceFilter);
   const baseHref = `/admin/registrations${baseHrefParams.toString() ? `?${baseHrefParams.toString()}` : ''}`;
 
   return (
@@ -98,14 +137,49 @@ export default async function AdminRegistrationsPage({
               {planType ? ` · plan ${planType === 'ANGELA_TOTAL' ? 'Total' : 'Esencial'}` : ''}
             </p>
           </div>
-          <Link
-            href={`/api/admin/export.csv?${exportQuery.toString()}`}
-            data-testid="admin-export-csv"
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-sensu-500 px-4 text-sm font-medium text-white transition-transform hover:-translate-y-0.5 active:scale-[0.98]"
-          >
-            <LuDownload aria-hidden className="h-4 w-4" />
-            Exportar CSV
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            {(() => {
+              const toggleParams = new URLSearchParams();
+              if (planType) toggleParams.set('plan', planType);
+              if (params.from) toggleParams.set('from', params.from);
+              if (params.to) toggleParams.set('to', params.to);
+              // Strict is the default; flipping to lenient = ?vista=all.
+              if (strictView) toggleParams.set('vista', 'all');
+              const toggleHref = `/admin/registrations${toggleParams.toString() ? `?${toggleParams.toString()}` : ''}`;
+              return (
+                <Link
+                  href={toggleHref}
+                  data-testid="admin-real-toggle"
+                  className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-transform hover:-translate-y-0.5 active:scale-[0.98] ${
+                    strictView
+                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+                      : 'bg-white text-zinc-700 ring-1 ring-inset ring-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  {strictView ? (
+                    <>
+                      <LuFilterX aria-hidden className="h-4 w-4" />
+                      Mostrar datos de prueba
+                    </>
+                  ) : (
+                    <>
+                      <LuFilter aria-hidden className="h-4 w-4" />
+                      Solo clientes reales
+                    </>
+                  )}
+                </Link>
+              );
+            })()}
+            <CrearDemoButton />
+            <Link
+              href={`/api/admin/export.csv?${exportQuery.toString()}`}
+              data-testid="admin-export-csv"
+              className="inline-flex h-10 items-center gap-2 rounded-full bg-sensu-500 px-4 text-sm font-medium text-white transition-transform hover:-translate-y-0.5 active:scale-[0.98]"
+            >
+              <LuDownload aria-hidden className="h-4 w-4" />
+              Exportar CSV
+            </Link>
+          </div>
         </header>
 
         <section className="mt-6">
@@ -154,6 +228,23 @@ export default async function AdminRegistrationsPage({
                 className="mt-1.5 block rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
               />
             </label>
+            <label className="text-sm">
+              <span className="block text-xs uppercase tracking-[0.14em] text-zinc-500">Origen</span>
+              <select
+                name="source"
+                data-testid="admin-filter-source"
+                defaultValue={sourceFilter ?? ''}
+                className="mt-1.5 block w-48 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
+              >
+                <option value="">Todos</option>
+                <option value="(none)">Sin etiqueta</option>
+                {sourceUniverse.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               type="submit"
               data-testid="admin-filter-apply"
@@ -198,12 +289,18 @@ export default async function AdminRegistrationsPage({
                   data-testid={`admin-card-${r.subscriptionId}`}
                   className="card-surface rounded-2xl p-4"
                 >
-                  <p className="break-all text-sm font-medium text-zinc-900">
-                    {r.email}
-                  </p>
-                  <p className="mt-0.5 text-xs text-zinc-500">
-                    {r.fullName ?? '—'}
-                  </p>
+                  <Link
+                    href={`/admin/registrations/${r.subscriptionId}`}
+                    data-testid={`admin-card-${r.subscriptionId}-detail`}
+                    className="block cursor-pointer"
+                  >
+                    <p className="break-all text-sm font-medium text-zinc-900 underline-offset-2 hover:text-sensu-700 hover:underline">
+                      {r.email}
+                    </p>
+                    <p className="mt-0.5 text-xs text-zinc-500">
+                      {r.fullName ?? '—'}
+                    </p>
+                  </Link>
                   <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                     <span
                       data-testid={`admin-card-${r.subscriptionId}-plan`}
@@ -224,6 +321,27 @@ export default async function AdminRegistrationsPage({
                     >
                       {r.status}
                     </span>
+                    <span
+                      data-testid={`admin-card-${r.subscriptionId}-questionnaire`}
+                      data-questionnaire-completed={r.questionnaireCompleted ? 'true' : 'false'}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 font-medium ring-1 ring-inset ${
+                        r.questionnaireCompleted
+                          ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                          : 'bg-amber-50 text-amber-700 ring-amber-200'
+                      }`}
+                    >
+                      {r.questionnaireCompleted ? (
+                        <>
+                          <LuCircleCheck aria-hidden className="h-3.5 w-3.5" />
+                          Cuestionario
+                        </>
+                      ) : (
+                        <>
+                          <LuClock aria-hidden className="h-3.5 w-3.5" />
+                          Sin cuestionario
+                        </>
+                      )}
+                    </span>
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                     <dt className="text-zinc-500">Pago</dt>
@@ -242,26 +360,6 @@ export default async function AdminRegistrationsPage({
                       {formatDate(r.purchaseDate ?? r.createdAt)}
                     </dd>
                   </dl>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Link
-                      href={`/admin/registrations/${r.subscriptionId}`}
-                      data-testid={`admin-card-${r.subscriptionId}-detail`}
-                      className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200 transition-colors hover:bg-zinc-50"
-                    >
-                      Ver detalle
-                      <LuArrowRight aria-hidden className="h-3 w-3" />
-                    </Link>
-                    {!r.hasPairedDevice && r.status === 'ACTIVE' && (
-                      <Link
-                        href={`/admin/dispatch?focus=${r.subscriptionId}`}
-                        data-testid={`admin-card-${r.subscriptionId}-pair`}
-                        className="inline-flex items-center gap-1 rounded-full bg-sensu-50 px-3 py-1 text-xs font-medium text-sensu-700 ring-1 ring-sensu-200 transition-colors hover:bg-sensu-100"
-                      >
-                        <LuLink2 aria-hidden className="h-3 w-3" />
-                        Asignar IMEI
-                      </Link>
-                    )}
-                  </div>
                 </li>
               ))}
             </ul>
@@ -278,10 +376,10 @@ export default async function AdminRegistrationsPage({
                     <th className="whitespace-nowrap px-5 py-3 font-medium">Plan</th>
                     <th className="whitespace-nowrap px-5 py-3 font-medium">Cadencia</th>
                     <th className="whitespace-nowrap px-5 py-3 font-medium">Estado</th>
+                    <th className="whitespace-nowrap px-5 py-3 font-medium">Cuestionario</th>
                     <th className="whitespace-nowrap px-5 py-3 font-medium tabular-nums">Pago</th>
                     <th className="whitespace-nowrap px-5 py-3 font-medium tabular-nums">Renovación</th>
                     <th className="whitespace-nowrap px-5 py-3 font-medium tabular-nums">Compra</th>
-                    <th className="whitespace-nowrap px-5 py-3 font-medium">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
@@ -290,7 +388,15 @@ export default async function AdminRegistrationsPage({
                       key={r.subscriptionId}
                       data-testid={`admin-row-${r.subscriptionId}`}
                     >
-                      <td className="whitespace-nowrap px-5 py-3 text-zinc-900">{r.email}</td>
+                      <td className="whitespace-nowrap px-5 py-3">
+                        <Link
+                          href={`/admin/registrations/${r.subscriptionId}`}
+                          data-testid={`admin-row-${r.subscriptionId}-detail`}
+                          className="text-zinc-900 underline-offset-2 hover:text-sensu-700 hover:underline cursor-pointer"
+                        >
+                          {r.email}
+                        </Link>
+                      </td>
                       <td className="whitespace-nowrap px-5 py-3 text-zinc-700">
                         {r.fullName ?? '—'}
                       </td>
@@ -307,11 +413,44 @@ export default async function AdminRegistrationsPage({
                         {r.cadence ? cadenceLabel(r.cadence as BillingCadence) : '—'}
                       </td>
                       <td className="whitespace-nowrap px-5 py-3">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_TONE[r.status] ?? 'bg-zinc-100 text-zinc-700 ring-zinc-200'}`}
-                        >
-                          {r.status}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_TONE[r.status] ?? 'bg-zinc-100 text-zinc-700 ring-zinc-200'}`}
+                          >
+                            {r.status}
+                          </span>
+                          {r.status === 'ACTIVE' && (
+                            <Link
+                              href={`/admin/dispatch?focus=${r.subscriptionId}`}
+                              data-testid={`admin-row-${r.subscriptionId}-pair`}
+                              className="text-xs font-medium text-sensu-700 underline-offset-2 hover:underline cursor-pointer"
+                            >
+                              Asignar IMEI
+                            </Link>
+                          )}
+                        </div>
+                      </td>
+                      <td
+                        className="whitespace-nowrap px-5 py-3"
+                        data-testid={`admin-row-${r.subscriptionId}-questionnaire`}
+                        data-questionnaire-completed={r.questionnaireCompleted ? 'true' : 'false'}
+                      >
+                        {r.questionnaireCompleted ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                            <LuCircleCheck aria-hidden className="h-3.5 w-3.5" />
+                            Completo
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                              <LuClock aria-hidden className="h-3.5 w-3.5" />
+                              Pendiente
+                            </span>
+                            <ResendWelcomeButton
+                              subscriptionId={r.subscriptionId}
+                            />
+                          </div>
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 tabular-nums text-zinc-700">
                         {formatPesos(r.amountPaidCentavos)}
@@ -324,28 +463,6 @@ export default async function AdminRegistrationsPage({
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 tabular-nums text-zinc-500">
                         {formatDate(r.purchaseDate ?? r.createdAt)}
-                      </td>
-                      <td className="whitespace-nowrap px-5 py-3 text-zinc-500">
-                        <div className="flex items-center gap-2">
-                          <Link
-                            href={`/admin/registrations/${r.subscriptionId}`}
-                            data-testid={`admin-row-${r.subscriptionId}-detail`}
-                            className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200 transition-colors hover:bg-zinc-50"
-                          >
-                            Ver detalle
-                            <LuArrowRight aria-hidden className="h-3 w-3" />
-                          </Link>
-                          {!r.hasPairedDevice && r.status === 'ACTIVE' && (
-                            <Link
-                              href={`/admin/dispatch?focus=${r.subscriptionId}`}
-                              data-testid={`admin-row-${r.subscriptionId}-pair`}
-                              className="inline-flex items-center gap-1 rounded-full bg-sensu-50 px-3 py-1 text-xs font-medium text-sensu-700 ring-1 ring-sensu-200 transition-colors hover:bg-sensu-100"
-                            >
-                              <LuLink2 aria-hidden className="h-3 w-3" />
-                              Asignar IMEI
-                            </Link>
-                          )}
-                        </div>
                       </td>
                     </tr>
                   ))}

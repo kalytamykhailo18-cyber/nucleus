@@ -1,5 +1,18 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { ALERT_EVENT_TYPES } from '@/lib/alerts';
+import { ALERT_EVENT_TYPES, type AlertEventType } from '@/lib/alerts';
+import { devicePrefixesFor } from '@/lib/admin-exclusions';
+
+/**
+ * Same emergency-event-type filter the operator-board fetcher applies.
+ * Device-prefix exclusion comes from the shared `devicePrefixesFor`
+ * helper so the operator queue + map + reporting all agree on what
+ * counts as a synthetic device ID.
+ */
+const CALLCENTER_EMERGENCY_EVENT_TYPES: AlertEventType[] = [
+  'sos',
+  'fall_detection',
+];
 
 /**
  * Operator map alerts (Phase B polish, 2026-06-10).
@@ -33,8 +46,22 @@ export interface OperatorMapAlert {
   operatorId: string | null;
 }
 
-export async function fetchOperatorMapAlerts(): Promise<OperatorMapAlert[]> {
+export async function fetchOperatorMapAlerts(
+  options: { callcenterMode?: boolean } = {},
+): Promise<OperatorMapAlert[]> {
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3_600_000);
+  const eventTypes = options.callcenterMode
+    ? CALLCENTER_EMERGENCY_EVENT_TYPES
+    : (ALERT_EVENT_TYPES as unknown as AlertEventType[]);
+  const excludedDevicePrefixes = devicePrefixesFor(
+    options.callcenterMode ?? false,
+  );
+  const devicePrefixSql = Prisma.sql`AND ${Prisma.join(
+    excludedDevicePrefixes.map(
+      (p) => Prisma.sql`e."eviewDeviceId" NOT LIKE ${p + '%'}`,
+    ),
+    ' AND ',
+  )}`;
 
   // Latest OperatorAction per event — DISTINCT ON keeps the most
   // recent row. Filter out events whose latest action is RESOLVED so
@@ -49,10 +76,9 @@ export async function fetchOperatorMapAlerts(): Promise<OperatorMapAlert[]> {
       a."eviewEventId", a."operatorUserId", a."kind"
     FROM "OperatorAction" a
     INNER JOIN "EviewEvent" e ON e.id = a."eviewEventId"
-    WHERE e."eventType" = ANY(${ALERT_EVENT_TYPES as readonly string[]}::text[])
+    WHERE e."eventType" = ANY(${eventTypes as readonly string[]}::text[])
       AND e."timestamp" >= ${since}
-      AND e."eviewDeviceId" NOT LIKE 'STEP6UI-%'
-      AND e."eviewDeviceId" NOT LIKE 'E2E-%'
+      ${devicePrefixSql}
     ORDER BY a."eviewEventId", a."createdAt" DESC
   `;
   const operatorByEvent = new Map<string, string>();
@@ -70,13 +96,12 @@ export async function fetchOperatorMapAlerts(): Promise<OperatorMapAlert[]> {
   const events = await prisma.eviewEvent.findMany({
     where: {
       timestamp: { gte: since },
-      eventType: { in: ALERT_EVENT_TYPES as unknown as string[] },
+      eventType: { in: eventTypes as unknown as string[] },
       lat: { not: null },
       lng: { not: null },
-      AND: [
-        { eviewDeviceId: { not: { startsWith: 'STEP6UI-' } } },
-        { eviewDeviceId: { not: { startsWith: 'E2E-' } } },
-      ],
+      AND: excludedDevicePrefixes.map((p) => ({
+        eviewDeviceId: { not: { startsWith: p } },
+      })),
     },
     select: {
       id: true,

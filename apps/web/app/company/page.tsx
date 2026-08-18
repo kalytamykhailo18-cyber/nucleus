@@ -1,5 +1,13 @@
 import { redirect } from 'next/navigation';
-import { LuBuilding2, LuBattery, LuMapPin, LuTriangleAlert, LuUsers } from 'react-icons/lu';
+import {
+  LuBattery,
+  LuBuilding2,
+  LuMapPin,
+  LuPersonStanding,
+  LuTriangleAlert,
+  LuUsers,
+  LuBatteryLow,
+} from 'react-icons/lu';
 import { auth } from '@/auth';
 import { SectionLabel } from '@/components/section-label';
 import { prisma } from '@/lib/db';
@@ -11,6 +19,8 @@ import {
   SharedContactsPanel,
   type SharedContactRow,
 } from './shared-contacts-panel';
+import { CompanyFleetMapLoader } from './company-fleet-map-loader';
+import { PushToggle } from '@/components/push-toggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,6 +105,134 @@ export default async function CompanyDashboardPage(): Promise<React.ReactElement
         </section>
 
         <section className="mt-10">
+          <SectionLabel icon={LuMapPin} tone="sensu">
+            Ubicación en tiempo real
+          </SectionLabel>
+          <p className="mt-1 text-xs text-zinc-500">
+            Un pin por dispositivo con la última señal recibida.
+          </p>
+          <div
+            data-testid="company-fleet-map"
+            className="mt-4 overflow-hidden rounded-3xl ring-1 ring-zinc-100"
+          >
+            <CompanyFleetMapLoader
+              members={members
+                .filter(
+                  (m) =>
+                    m.primaryDeviceImei !== null &&
+                    m.primaryDeviceLat !== null &&
+                    m.primaryDeviceLng !== null,
+                )
+                .map((m) => ({
+                  deviceId: m.primaryDeviceImei!,
+                  deviceName: m.fullName ?? m.email,
+                  masterName: m.fullName,
+                  createdAt: m.primaryDeviceLastSeenAt ?? new Date(0).toISOString(),
+                  lat: m.primaryDeviceLat,
+                  lng: m.primaryDeviceLng,
+                  lastSeenAt: m.primaryDeviceLastSeenAt,
+                  batteryLevel: m.primaryDeviceBattery,
+                }))}
+            />
+          </div>
+        </section>
+
+        {(() => {
+          // Fleet-wide alerts feed (Juan 2026-06-23 — B.3.1). HR lead
+          // sees what kind of alarms the company's devices have fired
+          // across the last 30 days, sorted newest first, scoped to
+          // ONLY this company's workers. Battery-low is omitted per
+          // D.1b so the feed reads as a true emergency log.
+          const fleetAlerts = members
+            .flatMap((m) =>
+              m.recentAlerts.map((a) => ({
+                ...a,
+                workerName: m.fullName ?? m.email,
+                workerId: m.userId,
+              })),
+            )
+            .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+            .slice(0, 20);
+          if (fleetAlerts.length === 0) return null;
+          return (
+            <section className="mt-10">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <SectionLabel icon={LuTriangleAlert} tone="rose">
+                    Alertas recientes de la flota
+                  </SectionLabel>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Últimas {fleetAlerts.length} emergencias (SOS y caídas)
+                    en los últimos 30 días. Toca una fila para ver la
+                    ubicación.
+                  </p>
+                </div>
+                <PushToggle />
+              </div>
+              <ul
+                data-testid="company-fleet-alerts"
+                className="card-surface mt-4 divide-y divide-zinc-100 rounded-3xl"
+              >
+                {fleetAlerts.map((a) => {
+                  const Icon = ALERT_ICON[a.eventType];
+                  const tone = ALERT_TONE[a.eventType];
+                  const formatted = new Date(a.timestamp).toLocaleString(
+                    'es-MX',
+                    {
+                      timeZone: 'America/Mexico_City',
+                      year: 'numeric',
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    },
+                  );
+                  const mapHref =
+                    a.lat !== null && a.lng !== null
+                      ? `https://www.google.com/maps?q=${a.lat},${a.lng}`
+                      : null;
+                  return (
+                    <li
+                      key={a.id}
+                      data-testid={`company-fleet-alert-${a.id}`}
+                      className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm"
+                    >
+                      <span
+                        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ring-inset ${tone.wrap}`}
+                      >
+                        <Icon
+                          aria-hidden
+                          className={`h-4 w-4 ${tone.icon}`}
+                        />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-zinc-900">
+                          {a.workerName}
+                        </p>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {ALERT_LABEL[a.eventType]} · {formatted}
+                        </p>
+                      </div>
+                      {mapHref && (
+                        <a
+                          href={mapHref}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
+                        >
+                          <LuMapPin aria-hidden className="h-3 w-3" />
+                          Ubicación
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })()}
+
+        <section className="mt-10">
           <SectionLabel icon={LuUsers} tone="sky">
             Trabajadores
           </SectionLabel>
@@ -160,6 +298,39 @@ function StatCard({
   );
 }
 
+const ALERT_LABEL: Record<'sos' | 'fall_detection' | 'battery_low', string> = {
+  sos: 'SOS',
+  fall_detection: 'Caída detectada',
+  battery_low: 'Batería baja',
+};
+
+const ALERT_TONE: Record<
+  'sos' | 'fall_detection' | 'battery_low',
+  { wrap: string; icon: string }
+> = {
+  sos: {
+    wrap: 'bg-rose-50 text-rose-800 ring-rose-200',
+    icon: 'text-rose-600',
+  },
+  fall_detection: {
+    wrap: 'bg-amber-50 text-amber-800 ring-amber-200',
+    icon: 'text-amber-600',
+  },
+  battery_low: {
+    wrap: 'bg-amber-50 text-amber-800 ring-amber-200',
+    icon: 'text-amber-600',
+  },
+};
+
+const ALERT_ICON: Record<
+  'sos' | 'fall_detection' | 'battery_low',
+  typeof LuTriangleAlert
+> = {
+  sos: LuTriangleAlert,
+  fall_detection: LuPersonStanding,
+  battery_low: LuBatteryLow,
+};
+
 function MemberCard({ member }: { member: CompanyMemberRow }): React.ReactElement {
   const battery = member.primaryDeviceBattery;
   const batteryTone =
@@ -224,6 +395,51 @@ function MemberCard({ member }: { member: CompanyMemberRow }): React.ReactElemen
           ? `${member.recentAlertCount} alerta${member.recentAlertCount === 1 ? '' : 's'} · 30d`
           : 'Sin alertas · 30d'}
       </div>
+      {member.recentAlerts.length > 0 && (
+        <ul
+          data-testid={`company-member-${member.userId}-recent`}
+          className="mt-2 flex w-full basis-full flex-col gap-1.5"
+        >
+          {member.recentAlerts.map((a) => {
+            const Icon = ALERT_ICON[a.eventType];
+            const tone = ALERT_TONE[a.eventType];
+            const formatted = new Date(a.timestamp).toLocaleString('es-MX', {
+              timeZone: 'America/Mexico_City',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const mapHref =
+              a.lat !== null && a.lng !== null
+                ? `https://www.google.com/maps?q=${a.lat},${a.lng}`
+                : null;
+            return (
+              <li
+                key={a.id}
+                data-testid={`company-member-${member.userId}-recent-${a.id}`}
+                className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs ring-1 ring-inset ${tone.wrap}`}
+              >
+                <Icon aria-hidden className={`h-3.5 w-3.5 ${tone.icon}`} />
+                <span className="font-medium">{ALERT_LABEL[a.eventType]}</span>
+                <span className="opacity-70">{formatted}</span>
+                {mapHref && (
+                  <a
+                    href={mapHref}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="ml-auto inline-flex items-center gap-1 underline-offset-2 hover:underline"
+                  >
+                    <LuMapPin aria-hidden className="h-3 w-3" />
+                    Ubicación
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </li>
   );
 }

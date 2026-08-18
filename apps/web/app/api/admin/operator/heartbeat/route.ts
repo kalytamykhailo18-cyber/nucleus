@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { requireAdmin } from '@/lib/admin';
+import { requireCallcenterOrAdmin } from '@/lib/admin';
 
 /**
  * Operator heartbeat (Phase B polish, 2026-06-10).
@@ -11,13 +11,13 @@ import { requireAdmin } from '@/lib/admin';
  * ahora" — the 30 s gap means a single dropped beat does not flicker
  * the operator off the panel.
  *
- * `requireAdmin()` guards the route: non-authed → /login, authed but
- * not ADMIN → /dashboard.
+ * `requireCallcenterOrAdmin()` guards the route: non-authed → /login,
+ * FAMILY user → /dashboard. CALLCENTER and ADMIN both pass.
  */
 export const dynamic = 'force-dynamic';
 
 export async function POST(): Promise<NextResponse> {
-  const me = await requireAdmin();
+  const me = await requireCallcenterOrAdmin();
   await prisma.user.update({
     where: { id: me.id },
     data: { lastOperatorPingAt: new Date() },

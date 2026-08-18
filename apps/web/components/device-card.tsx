@@ -1,6 +1,14 @@
-import { LuBellRing, LuClock, LuZap } from 'react-icons/lu';
+import {
+  LuBatteryFull,
+  LuBatteryWarning,
+  LuBellRing,
+  LuClock,
+  LuMapPin,
+  LuZap,
+} from 'react-icons/lu';
 import type { DeviceSummary } from '@/lib/devices';
 import { formatLastSeen } from '@/lib/format-last-seen';
+import { DeviceUnpairButton } from './device-unpair-button';
 
 /**
  * Device summary card — server component, no client-side JS.
@@ -94,13 +102,75 @@ function BatteryGauge({
   level,
   threshold,
   charging = false,
+  lastSeenAt,
   testId,
 }: {
   level: number | null;
   threshold: number;
   charging?: boolean;
+  lastSeenAt: string | null;
   testId?: string;
 }) {
+  // Inferred-healthy state (Juan 2026-06-18, tightened 2026-06-23). The
+  // Eview EV-12 firmware only reports a battery number when it crosses
+  // the low threshold (battery_low events). A healthy charged battery
+  // never fires those events, so the dashboard has no fresh reading to
+  // show — but it does know the device is actively connecting. When
+  // the device has pinged recently AND we have no recent number, we can
+  // honestly say "Carga saludable" because the firmware would have
+  // already alerted us if the battery were low.
+  //
+  // The window used to be 24h, which masked dead pendants: Juan's own
+  // device died, last-ping was 12h old (within 24h), so the card kept
+  // showing "Carga saludable" even though the battery was 0%. A healthy
+  // pendant pings GPS every few minutes, so anything past two hours is
+  // genuinely silent — the gauge below renders the neutral
+  // "no signal" UI instead.
+  const RECENTLY_ACTIVE_MS = 2 * 60 * 60 * 1000;
+  const recentlyActive = lastSeenAt
+    ? Date.now() - new Date(lastSeenAt).getTime() < RECENTLY_ACTIVE_MS
+    : false;
+  const inferredHealthy = level === null && recentlyActive && !charging;
+
+  if (inferredHealthy) {
+    return (
+      <div
+        className="flex items-center gap-2"
+        data-testid={testId}
+        data-battery-state="healthy-inferred"
+      >
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200"
+        >
+          <LuBatteryFull aria-hidden className="h-4 w-4" />
+          Carga saludable
+        </span>
+      </div>
+    );
+  }
+
+  // No reading AND not recently active (Juan 2026-06-26): the empty
+  // battery outline drawn by the gauge below looked like a broken
+  // loading state on the panel. Render the same pill shape as
+  // "Carga saludable" but in zinc with a warning icon so the row is
+  // visually consistent and legible at every breakpoint.
+  if (level === null && !charging) {
+    return (
+      <div
+        className="flex items-center gap-2"
+        data-testid={testId}
+        data-battery-state="no-reading"
+      >
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-600 ring-1 ring-inset ring-zinc-200"
+        >
+          <LuBatteryWarning aria-hidden className="h-4 w-4" />
+          Sin lectura reciente
+        </span>
+      </div>
+    );
+  }
+
   const colors = batteryColors(level, threshold, charging);
   const fillPct =
     level === null ? 0 : Math.max(4, Math.min(100, level));
@@ -174,20 +244,23 @@ export function DeviceCard({
             {device.deviceId}
           </p>
         </div>
-        <span
-          data-testid={`device-${device.deviceId}-status`}
-          suppressHydrationWarning
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${TONE_CLASSES[status.tone]}`}
-        >
+        <div className="flex shrink-0 items-center gap-2">
           <span
-            aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${DOT_CLASSES[status.tone]}`}
-          />
-          {status.label}
-        </span>
+            data-testid={`device-${device.deviceId}-status`}
+            suppressHydrationWarning
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${TONE_CLASSES[status.tone]}`}
+          >
+            <span
+              aria-hidden
+              className={`h-1.5 w-1.5 rounded-full ${DOT_CLASSES[status.tone]}`}
+            />
+            {status.label}
+          </span>
+          <DeviceUnpairButton deviceId={device.deviceId} label={device.label} />
+        </div>
       </div>
 
-      <dl className="mt-5 flex flex-col gap-5 text-sm sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+      <dl className="mt-5 flex flex-col gap-5 text-sm sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-x-8 sm:gap-y-4">
         <div>
           <dt className="text-xs uppercase tracking-[0.14em] text-zinc-500">
             Batería
@@ -196,6 +269,7 @@ export function DeviceCard({
             <BatteryGauge
               level={device.batteryLevel}
               threshold={device.batteryThreshold}
+              lastSeenAt={device.lastSeenAt}
               testId={`device-${device.deviceId}-battery`}
             />
           </dd>
@@ -213,6 +287,28 @@ export function DeviceCard({
             {formatLastSeen(device.lastSeenAt)}
           </dd>
         </div>
+        {device.lat !== null && device.lng !== null && (
+          <div>
+            <dt className="flex items-center gap-1.5 text-xs uppercase tracking-[0.14em] text-zinc-500">
+              <LuMapPin aria-hidden className="h-4 w-4 text-emerald-500" />
+              Ubicación
+            </dt>
+            <dd
+              data-testid={`device-${device.deviceId}-location`}
+              className="mt-1"
+            >
+              <a
+                href={`https://www.google.com/maps?q=${device.lat},${device.lng}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                data-testid={`device-${device.deviceId}-location-link`}
+                className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 underline-offset-2 hover:underline"
+              >
+                Ver en Google Maps
+              </a>
+            </dd>
+          </div>
+        )}
       </dl>
     </div>
   );

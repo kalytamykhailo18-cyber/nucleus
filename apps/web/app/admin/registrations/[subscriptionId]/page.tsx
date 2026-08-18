@@ -6,6 +6,7 @@ import {
   LuCircleCheck,
   LuCircleAlert,
   LuExternalLink,
+  LuLink2,
   LuMail,
   LuPhone,
   LuPackage,
@@ -18,6 +19,7 @@ import {
 import { requireAdmin, fetchSubscriptionDetail } from '@/lib/admin';
 import { SectionLabel } from '@/components/section-label';
 import { cadenceLabel, type BillingCadence } from '@/lib/plans';
+import { SubscriptionActionsPanel } from './subscription-actions-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +27,7 @@ const STATUS_TONE: Record<string, string> = {
   ACTIVE: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   PENDING_PAYMENT: 'bg-amber-50 text-amber-700 ring-amber-200',
   PAST_DUE: 'bg-rose-50 text-rose-700 ring-rose-200',
+  PAUSED: 'bg-sky-50 text-sky-700 ring-sky-200',
   CANCELLED: 'bg-zinc-100 text-zinc-600 ring-zinc-200',
 };
 
@@ -117,6 +120,22 @@ export default async function AdminSubscriptionDetailPage({
             {detail.status}
           </span>
         </div>
+
+        {/* IMEI cross-link — only when the customer is ACTIVE but has
+            no UserDevice row yet. Moved here from the registrations
+            list 2026-06-18 so the table stays clean and the IMEI-
+            assign flow surfaces exactly where the dispatcher landed
+            after clicking the email. */}
+        {detail.status === 'ACTIVE' && detail.devices.length === 0 && (
+          <Link
+            href={`/admin/dispatch?focus=${detail.subscriptionId}`}
+            data-testid="admin-subscription-pair-imei"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-sensu-50 px-4 py-2 text-sm font-medium text-sensu-700 ring-1 ring-sensu-200 transition-colors hover:bg-sensu-100 cursor-pointer"
+          >
+            <LuLink2 aria-hidden className="h-4 w-4" />
+            Asignar IMEI a este cliente
+          </Link>
+        )}
 
         {/* Plan + billing */}
         <section
@@ -387,12 +406,21 @@ export default async function AdminSubscriptionDetailPage({
               completar el primer pago.
             </p>
           )}
-          <p className="mt-3 text-xs text-zinc-500">
-            Acciones de cambio (reembolso, pausar, cambiar plan) se gestionan
-            desde Stripe por ahora. Esta página ya muestra el estado y la
-            historia que la mesa necesita para decidir.
-          </p>
         </section>
+
+        <SubscriptionActionsPanel
+          subscriptionId={detail.subscriptionId}
+          status={detail.status}
+          planType={detail.planType}
+          cadence={detail.cadence}
+          payments={detail.paymentHistory?.map((p) => ({
+            id: p.id,
+            amountCentavos: p.amountCentavos,
+            status: p.status,
+            refundedCentavos: p.refundedCentavos,
+            createdAt: p.createdAt,
+          })) ?? null}
+        />
       </div>
     </main>
   );

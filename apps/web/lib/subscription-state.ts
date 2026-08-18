@@ -10,7 +10,8 @@ export type SubscriptionStatusLive =
   | 'PENDING_PAYMENT'
   | 'ACTIVE'
   | 'PAST_DUE'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'PAUSED';
 
 export interface LatestSubscriptionState {
   subscriptionId: string;

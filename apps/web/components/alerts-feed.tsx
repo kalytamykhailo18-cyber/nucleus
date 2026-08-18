@@ -5,6 +5,7 @@ import {
   LuBatteryLow,
   LuChevronDown,
   LuCircleAlert,
+  LuExternalLink,
   LuMapPin,
   LuPersonStanding,
   LuRadio,
@@ -183,13 +184,54 @@ export function AlertsFeed({
                   <span className="mt-0.5 block truncate text-xs text-zinc-500">
                     {alert.deviceLabel}
                   </span>
+                  {/* Operator-ack indicator (audit gap 6 remainder,
+                      Ustym 2026-08-11). Non-null operatorRespondedAt
+                      means at least one OperatorAction has been
+                      recorded against the alert on the /admin/operator
+                      side — the professional queue has picked it up.
+                      Small emerald pill so a family scanning the feed
+                      knows the call-center is engaged, without having
+                      to open the alert modal. */}
+                  {alert.operatorRespondedAt && (
+                    <span
+                      data-testid={`alert-${alert.id}-operator-ack`}
+                      className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-100"
+                    >
+                      <span
+                        aria-hidden
+                        className="h-1.5 w-1.5 rounded-full bg-emerald-500"
+                      />
+                      Atendido por el centro
+                    </span>
+                  )}
                 </span>
                 <span
                   data-testid={`alert-${alert.id}-time`}
                   suppressHydrationWarning
-                  className="shrink-0 text-xs tabular-nums text-zinc-500"
+                  className="shrink-0 text-right text-xs tabular-nums text-zinc-500"
                 >
-                  {formatLastSeen(alert.timestamp)}
+                  <span className="block" suppressHydrationWarning>
+                    {formatLastSeen(alert.timestamp)}
+                  </span>
+                  {/* Audit gap 6 (Ustym 2026-08-10): "Hace 3 horas" is
+                      not enough for a family reviewing overnight
+                      events — the specific clock time is what they
+                      actually want to know. Absolute HH:mm sits below
+                      the relative line in dimmer text. Pinned to the
+                      America/Mexico_City timezone so the SSR and the
+                      client agree (React error #418 otherwise fires
+                      because the server renders in UTC while the
+                      browser uses local time). */}
+                  <span
+                    className="block text-[10px] text-zinc-400"
+                    suppressHydrationWarning
+                  >
+                    {new Date(alert.timestamp).toLocaleTimeString('es-MX', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      timeZone: 'America/Mexico_City',
+                    })}
+                  </span>
                 </span>
               </button>
             </li>
@@ -291,8 +333,21 @@ export function AlertsFeed({
                   <dt className="text-xs uppercase tracking-[0.14em] text-zinc-500">
                     Ubicación
                   </dt>
-                  <dd className="mt-1 text-zinc-700 tabular-nums">
-                    {open.lat.toFixed(5)}, {open.lng.toFixed(5)}
+                  <dd className="mt-1 flex flex-col gap-1">
+                    <a
+                      href={`https://www.google.com/maps?q=${open.lat},${open.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="alert-details-maps-link"
+                      className="inline-flex items-center gap-1.5 text-sensu-700 font-medium hover:underline underline-offset-2 cursor-pointer"
+                    >
+                      <LuMapPin aria-hidden className="h-3.5 w-3.5" />
+                      Ver en Google Maps
+                      <LuExternalLink aria-hidden className="h-3 w-3" />
+                    </a>
+                    <span className="text-xs text-zinc-500 tabular-nums">
+                      {open.lat.toFixed(5)}, {open.lng.toFixed(5)}
+                    </span>
                   </dd>
                 </div>
               )}

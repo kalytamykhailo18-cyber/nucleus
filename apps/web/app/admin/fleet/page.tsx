@@ -1,8 +1,17 @@
-import { LuBattery, LuMap, LuMapPin, LuPackage } from 'react-icons/lu';
+import Link from 'next/link';
+import {
+  LuBattery,
+  LuFilter,
+  LuFilterX,
+  LuMap,
+  LuMapPin,
+  LuPackage,
+} from 'react-icons/lu';
 import { PaginationNav } from '@/components/pagination-nav';
 import { SectionLabel } from '@/components/section-label';
-import { requireAdmin } from '@/lib/admin';
+import { requireCallcenterOrAdmin } from '@/lib/admin';
 import { fetchFleetDevices, type FleetDevice } from '@/lib/fleet-map';
+import { resolveStrictAdminView } from '@/lib/admin-view';
 import { FleetMapLoader } from './fleet-map-loader';
 
 export const dynamic = 'force-dynamic';
@@ -30,16 +39,22 @@ function paginate<T>(rows: T[], requested: number): {
 export default async function AdminFleetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; invPage?: string }>;
+  searchParams: Promise<{ page?: string; invPage?: string; vista?: string }>;
 }): Promise<React.ReactElement> {
-  await requireAdmin();
+  const admin = await requireCallcenterOrAdmin();
   const params = await searchParams;
   const parsePage = (raw: string | undefined): number => {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
   };
 
-  const devices = await fetchFleetDevices();
+  // Juan 2026-06-23 follow-up: strict is the DEFAULT — see
+  // resolveStrictAdminView. Playwright sessions get the opt-out
+  // cookie so the spec suite still sees the EV-* synthetic IMEIs.
+  const strictView = await resolveStrictAdminView(params.vista);
+  const devices = await fetchFleetDevices({
+    callcenterMode: admin.callcenterMode || strictView,
+  });
 
   // Three buckets:
   //   1. on the map (has GPS fix) — drives FleetMapClient
@@ -68,9 +83,36 @@ export default async function AdminFleetPage({
         <SectionLabel icon={LuMap} tone="sensu">
           Administración · Mapa de la flota
         </SectionLabel>
-        <h1 className="mt-2 text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-900">
-          Mapa de la flota
-        </h1>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-900">
+            Mapa de la flota
+          </h1>
+          {admin.role === 'ADMIN' && (
+            <Link
+              href={
+                strictView ? '/admin/fleet?vista=all' : '/admin/fleet'
+              }
+              data-testid="admin-fleet-real-toggle"
+              className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-transform hover:-translate-y-0.5 active:scale-[0.98] ${
+                strictView
+                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+                  : 'bg-white text-zinc-700 ring-1 ring-inset ring-zinc-200 hover:bg-zinc-50'
+              }`}
+            >
+              {strictView ? (
+                <>
+                  <LuFilterX aria-hidden className="h-4 w-4" />
+                  Mostrar datos de prueba
+                </>
+              ) : (
+                <>
+                  <LuFilter aria-hidden className="h-4 w-4" />
+                  Solo clientes reales
+                </>
+              )}
+            </Link>
+          )}
+        </div>
         <p className="mt-3 text-base text-zinc-500">
           Cada Angela activa aparece como un pin con su última ubicación
           conocida. El operador usa la cola de prioridades para triar las

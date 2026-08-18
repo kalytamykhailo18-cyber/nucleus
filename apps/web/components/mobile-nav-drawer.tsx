@@ -94,8 +94,23 @@ export function MobileNavDrawer({
     setOpen(false);
   }, [pathname]);
 
-  const isActive = (href: string): boolean =>
-    pathname === href || pathname.startsWith(`${href}/`);
+  // Active-state — only ONE href highlights at a time. We score every
+  // candidate by prefix-match length and pick the longest. Without this
+  // both `/profile` and `/profile/referrals` would light up when the
+  // user is on the sub-route (Juan caught this in the screenshot
+  // 2026-06-16).
+  const bestMatch = (() => {
+    let best: { href: string; length: number } | null = null;
+    for (const it of items) {
+      if (pathname === it.href || pathname.startsWith(`${it.href}/`)) {
+        if (!best || it.href.length > best.length) {
+          best = { href: it.href, length: it.href.length };
+        }
+      }
+    }
+    return best?.href ?? null;
+  })();
+  const isActive = (href: string): boolean => href === bestMatch;
 
   const groups: Group[] = [];
   for (const key of ['attention', 'primary', 'admin'] as const) {

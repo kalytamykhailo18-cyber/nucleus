@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
 
   const subscription = await prisma.subscription.findUnique({
     where: { id: parsed.data.subscriptionId },
-    select: { id: true, status: true, stripePaymentIntentId: true, cadence: true },
+    select: { id: true, userId: true, status: true, stripePaymentIntentId: true, cadence: true },
   });
   if (!subscription) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -76,6 +76,15 @@ export async function POST(request: NextRequest) {
   });
   if (flipped.count > 0) {
     void sendPaymentConfirmationEmail(subscription.id);
+    // Customer-facing referral redemption (Phase A+ #1). If the user
+    // signed up via a referral code, their PENDING Referral row now
+    // moves to REDEEMED and the referrer accrues account credit.
+    // Idempotent — safe even when the Stripe webhook also runs.
+    const { redeemReferralOnPayment } = await import('@/lib/referrals');
+    void redeemReferralOnPayment({
+      referredUserId: subscription.userId,
+      subscriptionId: subscription.id,
+    });
   }
 
   return NextResponse.json({ ok: true });

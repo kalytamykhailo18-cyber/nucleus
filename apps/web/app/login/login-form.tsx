@@ -10,6 +10,7 @@ import {
   LuEye,
   LuEyeOff,
   LuKeyRound,
+  LuRadio,
   LuUsers,
 } from 'react-icons/lu';
 
@@ -193,6 +194,32 @@ export default function LoginForm() {
             </span>
           </span>
           <span aria-hidden className="text-sm font-medium text-sensu-600">→</span>
+        </Link>
+
+        {/*
+          Juan 2026-04-20 ask, shipped at /signup/claim 2026-05-07, but
+          discoverability was missing through 2026-06-30 — the IMEI-only
+          flat signup had no surface on /login, so a relative with the
+          box but no QR-share invitation had no path in. This card pulls
+          the existing flow forward where buyers actually land first.
+        */}
+        <Link
+          href="/signup/claim"
+          data-testid="login-claim-link"
+          className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-emerald-50/70 px-4 py-3 ring-1 ring-emerald-200/70 transition-colors hover:bg-emerald-50 animate-fade-up [animation-delay:560ms]"
+        >
+          <span className="flex items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white ring-1 ring-emerald-200">
+              <LuRadio aria-hidden className="h-4 w-4 text-emerald-600" />
+            </span>
+            <span className="text-sm text-zinc-700">
+              <span className="font-medium text-zinc-900">¿Ya tienes el botón Sensu?</span>
+              <span className="block text-xs text-zinc-500">
+                Actívalo con el IMEI impreso en la caja, sin contraseña adicional.
+              </span>
+            </span>
+          </span>
+          <span aria-hidden className="text-sm font-medium text-emerald-700">→</span>
         </Link>
       </div>
     </main>

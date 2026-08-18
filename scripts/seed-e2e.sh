@@ -37,11 +37,11 @@ PASSWORD="${NUCLEUS_DEMO_PASSWORD:-}"
 FULL_NAME="${NUCLEUS_DEMO_FULL_NAME:-Demo Sensu}"
 DEVICE_A="${NUCLEUS_DEMO_DEVICE_PRIMARY:-EV-DEMO-0001}"
 DEVICE_B="${NUCLEUS_DEMO_DEVICE_SECONDARY:-EV-DEMO-0002}"
-# Real EV-12 pendant Juan activated on LocTube (2026-05-05). Linked to
-# the demo account so the acceptance review sees the live device on the
-# same dashboard as the seeded ones, and pressing SOS on the physical
-# pendant lands the alert here in real time.
-DEVICE_EV12="${NUCLEUS_DEMO_DEVICE_EV12:-861615072578829}"
+# Juan's real EV-12 (IMEI 861615072578829, LocTube 2026-05-05) used to
+# be auto-linked to the demo family for hands-on review. Retired
+# 2026-06-17 once Juan moved the device to his own customer account
+# `juanpabloriveras1999@gmail.com`, so the operator board surfaces HIS
+# identity when he presses the physical SOS, not the demo family's.
 ADMIN_EMAIL="${NUCLEUS_ADMIN_EMAIL:-admin@sensu.com.mx}"
 ADMIN_PASSWORD="${NUCLEUS_ADMIN_PASSWORD:-}"
 ADMIN_FULL_NAME="${NUCLEUS_ADMIN_FULL_NAME:-Admin Sensu}"
@@ -117,10 +117,6 @@ hook_post /api/dev/seed-device "$(printf '{"userEmail":"%s","deviceId":"%s","lab
 yellow "assigning secondary device :: $DEVICE_B (Polanco fix)"
 hook_post /api/dev/seed-device "$(printf '{"userEmail":"%s","deviceId":"%s","label":"Botón de respaldo","isPrimary":false,"batteryLevel":42,"lastSeenMinutesAgo":17,"lat":19.4338,"lng":-99.1959}' \
   "$EMAIL" "$DEVICE_B")"
-
-yellow "linking real EV-12 pendant :: $DEVICE_EV12 (LocTube live)"
-hook_post /api/dev/seed-device "$(printf '{"userEmail":"%s","deviceId":"%s","label":"EV-12 (Juan, prueba)","isPrimary":false,"batteryLevel":88,"lastSeenMinutesAgo":5}' \
-  "$EMAIL" "$DEVICE_EV12")"
 
 yellow "wiping prior geofences on demo devices (deterministic re-seed)"
 # Geofences are wiped here so the seed below plants exactly the
@@ -238,6 +234,16 @@ if [[ -n "$ADMIN_PASSWORD" ]]; then
   hook_delete "/api/dev/events?deviceId=EV-ADMIN-0001"
   hook_delete "/api/dev/geofences?deviceId=EV-ADMIN-0001"
   hook_post /api/dev/seed-device "$(printf '{"userEmail":"%s","deviceId":"EV-ADMIN-0001","label":"Botón admin","isPrimary":true,"batteryLevel":92,"lastSeenMinutesAgo":2,"lat":19.4250,"lng":-99.1700}' \
+    "$ADMIN_EMAIL")"
+
+  # Heal any leaked `e2e-presence-device-*` UserDevice pairing on the
+  # admin. seed-presence used to attach the synthetic presence device
+  # to the admin as MASTER, which then surfaced on the admin's
+  # /dashboard as a phantom 2nd device. The route now reroutes the
+  # pairing to a dedicated fixture user; one call here re-anchors any
+  # legacy admin pairing.
+  yellow "healing leaked presence-device pairing on $ADMIN_EMAIL"
+  hook_post /api/dev/seed-presence "$(printf '{"adminEmail":"%s"}' \
     "$ADMIN_EMAIL")"
 
   yellow "populating admin's profile (medical fields for hands-on review)"

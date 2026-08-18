@@ -11,6 +11,8 @@ import { NavigationProgress } from '@/components/navigation-progress';
 import { FloatingWhatsApp } from '@/components/floating-whatsapp';
 import { ServiceWorkerRegister } from '@/components/service-worker-register';
 import { PwaInstallTutorial } from '@/components/pwa-install-tutorial';
+import { ConnectivityToasts } from '@/components/connectivity-toasts';
+import { BrokenImageHider } from '@/components/broken-image-hider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -23,26 +25,26 @@ const inter = Inter({
 // with a page-specific image where it makes sense (audience pages use
 // their own promo poster).
 const OG_DEFAULT_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/image/upload/c_fill,g_auto,w_1200,h_630,q_auto,f_jpg/v1780582692/sensu/landing/angela-device.png';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://sensu.com.mx'),
   title: {
-    default: 'Sensu — Monitoreo 24/7 con respuesta humana',
-    template: '%s · Sensu',
+    default: 'Sensu Angela — Monitoreo 24/7 con respuesta humana',
+    template: '%s · Sensu Angela',
   },
   description:
     'Sensu Angela es un sistema de protección personal con botón SOS, GPS y centro de asistencia 24/7 — cuida a quien más quieres dentro y fuera de casa.',
-  applicationName: 'Sensu',
+  applicationName: 'Sensu Angela',
   alternates: {
     canonical: '/',
   },
   openGraph: {
     type: 'website',
-    siteName: 'Sensu',
+    siteName: 'Sensu Angela',
     locale: 'es_MX',
     url: 'https://sensu.com.mx',
-    title: 'Sensu — Monitoreo 24/7 con respuesta humana',
+    title: 'Sensu Angela — Monitoreo 24/7 con respuesta humana',
     description:
       'Sensu Angela es un sistema de protección personal con botón SOS, GPS y centro de asistencia 24/7.',
     images: [
@@ -56,7 +58,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Sensu — Monitoreo 24/7 con respuesta humana',
+    title: 'Sensu Angela — Monitoreo 24/7 con respuesta humana',
     description:
       'Sensu Angela es un sistema de protección personal con botón SOS, GPS y centro de asistencia 24/7.',
     images: [OG_DEFAULT_IMAGE],
@@ -66,7 +68,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'Sensu',
+    title: 'Sensu Angela',
   },
   formatDetection: {
     telephone: false,
@@ -88,12 +90,22 @@ export default function RootLayout({
     <html lang="es" className={inter.variable}>
       <body className="font-[family-name:var(--font-display)] antialiased text-zinc-900 bg-[#f5f5f7] selection:bg-sensu-100 selection:text-zinc-900 flex flex-col min-h-screen">
         <BfcacheGuard />
+        <BrokenImageHider />
         <ServiceWorkerRegister />
-        <PwaInstallTutorial />
+        <ConnectivityToasts />
+        <HideOnPaths paths={['/admin', '/checkout']}>
+          <PwaInstallTutorial />
+        </HideOnPaths>
         <Suspense fallback={null}>
           <NavigationProgress />
         </Suspense>
-        <AppHeader />
+        {/* Global AppHeader is suppressed on the compact family + operator
+            app surfaces (Ustym 2026-08-10 audit gap 2) — those pages own
+            their own page-level header so the marketing brand does not
+            stack on top of the app brand. */}
+        <HideOnPaths paths={['/app']}>
+          <AppHeader />
+        </HideOnPaths>
         <HideOnPaths
           paths={[
             '/checkout',
@@ -106,11 +118,17 @@ export default function RootLayout({
           <PendingPaymentBanner />
         </HideOnPaths>
         <div className="flex-1 flex flex-col">{children}</div>
-        <AppFooter />
+        {/* Marketing footer (© / Contacto / Términos) is hidden on the
+            app surfaces (audit gap 3) — legal-copy footer has no place
+            on an emergency-monitoring surface a family opens at 2 AM. */}
+        <HideOnPaths paths={['/app']}>
+          <AppFooter />
+        </HideOnPaths>
         {/* Floating WhatsApp CTA — visible on every public/marketing
-            surface, suppressed on auth + app routes where it would
-            distract from task flows. The HideOnPaths wrapper renders
-            null on each listed prefix. */}
+            surface, suppressed on auth + app + install routes where it
+            would distract from task flows. Audit gap 4: adding /app and
+            /instalar so the green circle stops overlapping the map pin
+            and the install tutorial on iPhone SE. */}
         <HideOnPaths
           paths={[
             '/checkout',
@@ -122,6 +140,8 @@ export default function RootLayout({
             '/profile',
             '/geofences',
             '/admin',
+            '/app',
+            '/instalar',
           ]}
         >
           <FloatingWhatsApp />

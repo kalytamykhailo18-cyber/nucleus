@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   LuPhone,
@@ -15,9 +15,12 @@ import {
   LuCheck,
   LuPencil,
   LuCircleDot,
+  LuVolume2,
+  LuVolumeOff,
 } from 'react-icons/lu';
 import { Modal } from '@/components/modal';
 import { PaginationNav } from '@/components/pagination-nav';
+import { BulkResolveButton } from './bulk-resolve-button';
 import type { OperatorBoardAlert } from '@/lib/operator-board';
 import type { OperatorPresence } from '@/lib/operator-presence';
 import type { OperatorMapAlert } from '@/lib/operator-map';
@@ -43,6 +46,9 @@ type ActionKind =
   | 'CALLED_EMERGENCY_CONTACT'
   | 'CALLED_FAMILY'
   | 'PHONED_AURA'
+  | 'CALLED_911'
+  | 'DISPATCHED_AMBULANCE'
+  | 'FALSE_ALARM'
   | 'NOTED'
   | 'RESOLVED';
 
@@ -59,17 +65,30 @@ const ACTION_LABEL: Record<ActionKind, string> = {
   CALLED_EMERGENCY_CONTACT: 'Llamé al contacto de emergencia',
   CALLED_FAMILY: 'Llamé a la familia',
   PHONED_AURA: 'Llamé a Aura',
+  CALLED_911: 'Llamé al 911',
+  DISPATCHED_AMBULANCE: 'Despaché ambulancia',
+  FALSE_ALARM: 'Falsa alarma',
   NOTED: 'Nota',
   RESOLVED: 'Marqué resuelto',
 };
 
-const QUICK_ACTIONS: ActionKind[] = [
+// Two-row grouping (Juan 2026-06-26): contact attempts on top, then
+// the high-stakes closers on a separate row so a misclick on
+// "RESOLVED" or "FALSA ALARMA" can't sneak in next to a regular
+// callback button.
+const CALL_ACTIONS: ActionKind[] = [
   'CALLED_SENIOR',
   'CALLED_EMERGENCY_CONTACT',
   'CALLED_FAMILY',
   'PHONED_AURA',
-  'RESOLVED',
+  'CALLED_911',
+  'DISPATCHED_AMBULANCE',
 ];
+const CLOSE_ACTIONS: ActionKind[] = ['RESOLVED', 'FALSE_ALARM'];
+// Kinds that prompt a "Are you sure?" before firing — these
+// effectively close the alert so the dispatcher should not be able to
+// land them with a single accidental tap.
+const CONFIRM_REQUIRED: Set<ActionKind> = new Set(['RESOLVED', 'FALSE_ALARM']);
 
 interface RosterEnrichment {
   matchedBy: string;
@@ -91,6 +110,19 @@ interface RosterEnrichment {
   } | null;
   watchers: Array<{ fullName: string | null; phone: string | null; email: string | null }>;
   emergencyContacts: Array<{ fullName: string | null; phone: string | null; relationship?: string | null }>;
+  // Industrial-fleet rail (Phase C #1). Non-null only when the matched
+  // device's MASTER is a MANAGED_WORKER on a Company with
+  // isManagedFleet=true. The operator UI uses this to swap "Adulto
+  // mayor" labels for "Trabajador", show the company name as a badge,
+  // and re-title the emergency-contacts section so the dispatcher
+  // knows they're phoning the shared company roster, not the worker's
+  // personal family.
+  managedFleet: {
+    companyName: string;
+    workerFullName: string | null;
+    employeeId: string | null;
+    jobTitle: string | null;
+  } | null;
 }
 
 const EVENT_TONE: Record<string, { dot: string; chip: string; label: string }> = {
@@ -164,6 +196,11 @@ export function OperatorBoardClient({
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Two-step confirm for the closer actions (RESOLVED, FALSE_ALARM)
+  // so a misclick on the dispatcher screen can't close a live
+  // emergency. First click stages the kind; second click within
+  // 6 seconds fires it. Resets to null on modal close or stale.
+  const [pendingClose, setPendingClose] = useState<ActionKind | null>(null);
   const [actions, setActions] = useState<OperatorActionRow[]>([]);
   const [actionBusy, setActionBusy] = useState<ActionKind | null>(null);
   const [actionNote, setActionNote] = useState('');
@@ -189,6 +226,86 @@ export function OperatorBoardClient({
       );
     void ping();
     const id = window.setInterval(ping, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Audible cue on new SOS / fall arrivals (Juan 2026-06-25, Phase B
+  // polish). Operator board now polls /api/admin/operator/alerts every
+  // 15 s; the first new emergency-class alert ID we see between polls
+  // beeps a short Web Audio tone so the dispatcher cannot miss a
+  // fresh page-1 arrival even when looking at another tab.
+  //
+  // First-load IDs seed the seen-set WITHOUT beeping (otherwise every
+  // existing alert would scream the moment the page opens). Audio is
+  // gated behind a Mute toggle the operator can flip — defaults to
+  // ON because the whole point is the dispatcher hears it.
+  const [muted, setMuted] = useState<boolean>(false);
+  const seenAlertIdsRef = useRef<Set<string>>(
+    new Set(initialAlerts.map((a) => a.id)),
+  );
+  const mutedRef = useRef(muted);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  useEffect(() => {
+    const EMERGENCY_TYPES = new Set(['sos', 'fall_detection']);
+
+    function playBeep(): void {
+      if (typeof window === 'undefined') return;
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext })
+            .webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        // 880 Hz square-ish tone, 250 ms, soft fade-in/out — sharp
+        // enough to grab attention, short enough not to annoy when
+        // multiple alerts land in quick succession.
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.02);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.25);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.3);
+        osc.onended = (): void => {
+          ctx.close().catch(() => undefined);
+        };
+      } catch {
+        // Browser blocked autoplay (no user gesture yet) — silently
+        // skip; the visual list update still surfaces the alert.
+      }
+    }
+
+    async function poll(): Promise<void> {
+      try {
+        const res = await fetch('/api/admin/operator/alerts', {
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          alerts?: Array<{ id: string; eventType: string }>;
+        };
+        const incoming = body.alerts ?? [];
+        let freshEmergency = false;
+        for (const a of incoming) {
+          if (seenAlertIdsRef.current.has(a.id)) continue;
+          seenAlertIdsRef.current.add(a.id);
+          if (EMERGENCY_TYPES.has(a.eventType)) freshEmergency = true;
+        }
+        if (freshEmergency && !mutedRef.current) {
+          playBeep();
+        }
+      } catch {
+        // Network blip — skip this tick. Next poll catches up.
+      }
+    }
+    const id = window.setInterval(poll, 15_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -275,6 +392,37 @@ export function OperatorBoardClient({
     }
   };
 
+  // Auto-clear the pending-close prompt after 6 s so a staged confirm
+  // never leaves a dangling "click again to confirm" button if the
+  // dispatcher walks away mid-flow.
+  useEffect(() => {
+    if (!pendingClose) return;
+    const t = window.setTimeout(() => setPendingClose(null), 6_000);
+    return () => window.clearTimeout(t);
+  }, [pendingClose]);
+
+  // Reset pendingClose whenever the modal closes — a staged confirm
+  // for one alert must never silently fire on the NEXT alert opened.
+  useEffect(() => {
+    if (!openAlert) setPendingClose(null);
+  }, [openAlert]);
+
+  // Wrapper called by every preset button. For CONFIRM_REQUIRED kinds,
+  // first click stages; second click (within 6 s) fires. For
+  // everything else, fires immediately.
+  const handlePresetClick = (kind: ActionKind): void => {
+    if (CONFIRM_REQUIRED.has(kind)) {
+      if (pendingClose === kind) {
+        setPendingClose(null);
+        void recordAction(kind);
+      } else {
+        setPendingClose(kind);
+      }
+      return;
+    }
+    void recordAction(kind);
+  };
+
   const recordAction = async (kind: ActionKind): Promise<void> => {
     if (!openAlert) return;
     setActionBusy(kind);
@@ -292,7 +440,12 @@ export function OperatorBoardClient({
         const body = (await res.json()) as { action: OperatorActionRow };
         setActions((prev) => [...prev, body.action]);
         setActionNote('');
-        if (kind === 'RESOLVED' && openAlert) {
+        // Both RESOLVED and FALSE_ALARM close the alert from the
+        // dispatcher's perspective — the queue's session-resolved
+        // overlay marks the row as handled either way so the same
+        // event doesn't flicker back to "unresolved" until the
+        // server refresh catches up.
+        if ((kind === 'RESOLVED' || kind === 'FALSE_ALARM') && openAlert) {
           const resolvedId = openAlert.id;
           setSessionResolved((prev) => {
             const next = new Set(prev);
@@ -363,6 +516,30 @@ export function OperatorBoardClient({
         >
           Sin resolver
         </button>
+        <BulkResolveButton />
+        <button
+          type="button"
+          data-testid="admin-operator-mute"
+          aria-pressed={muted}
+          onClick={() => setMuted((v) => !v)}
+          title={
+            muted
+              ? 'Sonido apagado para alertas nuevas'
+              : 'Sonido activo para alertas nuevas'
+          }
+          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer ${
+            muted
+              ? 'bg-white text-zinc-500 ring-1 ring-zinc-200 hover:bg-zinc-50'
+              : 'bg-sensu-50 text-sensu-700 ring-1 ring-sensu-200 hover:bg-sensu-100'
+          }`}
+        >
+          {muted ? (
+            <LuVolumeOff aria-hidden className="h-3.5 w-3.5" />
+          ) : (
+            <LuVolume2 aria-hidden className="h-3.5 w-3.5" />
+          )}
+          {muted ? 'Silenciado' : 'Sonido'}
+        </button>
       </div>
 
       {alerts.length === 0 ? (
@@ -425,7 +602,7 @@ export function OperatorBoardClient({
                       </span>
                       {a.isResolved ? (
                         <span
-                          data-testid="admin-operator-row-resolved-badge"
+                          data-testid={`operator-resolved-badge-${a.id}`}
                           className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200"
                         >
                           <LuCheck className="h-3 w-3" />
@@ -619,40 +796,79 @@ export function OperatorBoardClient({
               <p className="text-sm text-zinc-500">Cargando ficha del titular…</p>
             ) : roster ? (
               <>
-                <section className="rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200/70">
-                  <p className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-zinc-500">
-                    <LuShield className="h-4 w-4 text-sensu-500" />
-                    Adulto mayor
-                  </p>
-                  <p
-                    data-testid="admin-operator-modal-senior-name"
-                    className="mt-2 text-sm font-semibold text-zinc-900"
+                {roster.managedFleet ? (
+                  // Industrial-fleet rail: the matched device's
+                  // MASTER is a worker, not a senior. Swap labels,
+                  // hide the senior-only medical block, and show the
+                  // employing company so the dispatcher does not
+                  // confuse the shared company roster below with a
+                  // personal family contact list.
+                  <section
+                    data-testid="admin-operator-modal-managed-worker"
+                    className="rounded-2xl bg-amber-50 p-4 ring-1 ring-amber-200/70"
                   >
-                    {roster.careRecipient?.fullName ?? '—'}
-                  </p>
-                  <p className="mt-1 text-xs text-zinc-700">
-                    <LuPhone className="inline h-3 w-3" />{' '}
-                    {roster.careRecipient?.phone ?? '—'}
-                    {roster.careRecipient?.age !== null && roster.careRecipient?.age !== undefined ? (
-                      <> · {roster.careRecipient.age} años</>
+                    <p className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-amber-700">
+                      <LuShield className="h-4 w-4" />
+                      Trabajador · flota industrial
+                    </p>
+                    <p
+                      data-testid="admin-operator-modal-worker-name"
+                      className="mt-2 text-sm font-semibold text-zinc-900"
+                    >
+                      {roster.managedFleet.workerFullName ?? '—'}
+                    </p>
+                    <p
+                      data-testid="admin-operator-modal-worker-company"
+                      className="mt-1 text-xs font-medium text-amber-800"
+                    >
+                      Empresa: {roster.managedFleet.companyName}
+                    </p>
+                    {roster.managedFleet.jobTitle || roster.managedFleet.employeeId ? (
+                      <p className="mt-1 text-xs text-zinc-700">
+                        {roster.managedFleet.jobTitle ?? ''}
+                        {roster.managedFleet.jobTitle && roster.managedFleet.employeeId ? ' · ' : ''}
+                        {roster.managedFleet.employeeId
+                          ? `ID ${roster.managedFleet.employeeId}`
+                          : ''}
+                      </p>
                     ) : null}
-                  </p>
-                  <p className="mt-1 break-words text-xs text-zinc-600">
-                    <LuMapPin className="inline h-3 w-3" />{' '}
-                    {roster.careRecipient?.address ?? '—'}
-                  </p>
-                  {roster.careRecipient?.medicalConditions ? (
-                    <p className="mt-2 text-xs leading-snug text-zinc-700">
-                      <span className="font-medium">Médico:</span>{' '}
-                      {roster.careRecipient.medicalConditions}
+                  </section>
+                ) : (
+                  <section className="rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200/70">
+                    <p className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-zinc-500">
+                      <LuShield className="h-4 w-4 text-sensu-500" />
+                      Adulto mayor
                     </p>
-                  ) : null}
-                  {roster.careRecipient?.auraIdentifier ? (
-                    <p className="mt-2 font-mono text-[11px] text-zinc-500">
-                      Aura ID: {roster.careRecipient.auraIdentifier}
+                    <p
+                      data-testid="admin-operator-modal-senior-name"
+                      className="mt-2 text-sm font-semibold text-zinc-900"
+                    >
+                      {roster.careRecipient?.fullName ?? '—'}
                     </p>
-                  ) : null}
-                </section>
+                    <p className="mt-1 text-xs text-zinc-700">
+                      <LuPhone className="inline h-3 w-3" />{' '}
+                      {roster.careRecipient?.phone ?? '—'}
+                      {roster.careRecipient?.age !== null && roster.careRecipient?.age !== undefined ? (
+                        <> · {roster.careRecipient.age} años</>
+                      ) : null}
+                    </p>
+                    <p className="mt-1 break-words text-xs text-zinc-600">
+                      <LuMapPin className="inline h-3 w-3" />{' '}
+                      {roster.careRecipient?.address ?? '—'}
+                    </p>
+                    {roster.careRecipient?.medicalConditions ? (
+                      <p className="mt-2 text-xs leading-snug text-zinc-700">
+                        <span className="font-medium">Médico:</span>{' '}
+                        {roster.careRecipient.medicalConditions}
+                      </p>
+                    ) : null}
+                    {roster.careRecipient?.auraIdentifier ? (
+                      <p className="mt-2 font-mono text-[11px] text-zinc-500">
+                        Aura ID: {roster.careRecipient.auraIdentifier}
+                      </p>
+                    ) : null}
+                  </section>
+                )}
 
                 <section className="rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200/70">
                   <p className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-zinc-500">
@@ -668,10 +884,15 @@ export function OperatorBoardClient({
                 </section>
 
                 {roster.emergencyContacts.length > 0 ? (
-                  <section className="rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200/70">
+                  <section
+                    data-testid="admin-operator-modal-emergency-contacts"
+                    className="rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200/70"
+                  >
                     <p className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-zinc-500">
                       <LuTriangleAlert className="h-4 w-4 text-rose-500" />
-                      Contactos de emergencia
+                      {roster.managedFleet
+                        ? `Contactos compartidos · ${roster.managedFleet.companyName}`
+                        : 'Contactos de emergencia'}
                     </p>
                     <ul className="mt-2 grid gap-2 text-sm">
                       {roster.emergencyContacts.map((c, i) => (
@@ -799,13 +1020,16 @@ export function OperatorBoardClient({
                     maxLength={2_000}
                     className="mt-4 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/60"
                   />
+                  {/* Call attempts row — neutral pills, fires on
+                      single click. The note (if any) attaches to the
+                      next preset clicked. */}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {QUICK_ACTIONS.map((kind) => (
+                    {CALL_ACTIONS.map((kind) => (
                       <button
                         key={kind}
                         type="button"
                         data-testid={`admin-operator-action-${kind}-btn`}
-                        onClick={() => void recordAction(kind)}
+                        onClick={() => handlePresetClick(kind)}
                         disabled={actionBusy !== null}
                         className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 ring-1 ring-zinc-300 transition-transform hover:-translate-y-0.5 active:scale-[0.98] disabled:cursor-progress disabled:opacity-60 disabled:hover:translate-y-0 cursor-pointer"
                       >
@@ -821,6 +1045,42 @@ export function OperatorBoardClient({
                     >
                       {actionBusy === 'NOTED' ? 'Guardando…' : 'Guardar nota'}
                     </button>
+                  </div>
+
+                  {/* Closer row — visually separated, requires a
+                      two-step confirm because each of these closes
+                      the alert from the queue. */}
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-zinc-200 pt-3">
+                    <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                      Cerrar alerta
+                    </span>
+                    {CLOSE_ACTIONS.map((kind) => {
+                      const isPending = pendingClose === kind;
+                      const baseClass =
+                        kind === 'RESOLVED'
+                          ? isPending
+                            ? 'bg-emerald-600 text-white ring-emerald-600'
+                            : 'bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100'
+                          : isPending
+                            ? 'bg-amber-600 text-white ring-amber-600'
+                            : 'bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100';
+                      return (
+                        <button
+                          key={kind}
+                          type="button"
+                          data-testid={`admin-operator-action-${kind}-btn`}
+                          onClick={() => handlePresetClick(kind)}
+                          disabled={actionBusy !== null}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-transform hover:-translate-y-0.5 active:scale-[0.98] disabled:cursor-progress disabled:opacity-60 disabled:hover:translate-y-0 cursor-pointer ${baseClass}`}
+                        >
+                          {actionBusy === kind
+                            ? 'Registrando…'
+                            : isPending
+                              ? `Confirmar: ${ACTION_LABEL[kind]}`
+                              : ACTION_LABEL[kind]}
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               </>
@@ -885,6 +1145,7 @@ function OperatorPresencePanel({
           </span>
           <span
             data-testid={`operator-presence-row-${r.operatorId}-last-seen`}
+            suppressHydrationWarning
             className="text-[11px] text-zinc-500"
           >
             {formatLastSeen(r.lastPingAt)}

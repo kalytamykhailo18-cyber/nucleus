@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
 import { LuShield } from 'react-icons/lu';
-import { auth } from '@/auth';
+import { requireFamilySession } from '@/lib/admin';
 import { prisma } from '@/lib/db';
-import { fetchPlanByType, formatPriceMXN, type PlanType } from '@/lib/plans';
+import { fetchPlanByType, type PlanType } from '@/lib/plans';
 import { QuestionnaireForm } from './questionnaire-form';
 
 /**
@@ -20,13 +20,10 @@ import { QuestionnaireForm } from './questionnaire-form';
 export const dynamic = 'force-dynamic';
 
 export default async function QuestionnairePage() {
-  const session = await auth();
-  if (!session?.user) {
-    redirect('/login?next=%2Fonboarding%2Fquestionnaire');
-  }
+  const { id: userId } = await requireFamilySession('/onboarding/questionnaire');
 
   const me = await prisma.user.findUnique({
-    where: { id: session.user.id },
+    where: { id: userId },
     select: {
       questionnaireCompleted: true,
       phone: true,
@@ -74,25 +71,17 @@ export default async function QuestionnairePage() {
         {plan && (
           <div
             data-testid="onboarding-plan-recap"
-            className="card-surface mt-8 flex items-center justify-between rounded-3xl px-6 py-5"
+            className="card-surface mt-8 rounded-3xl px-6 py-5"
           >
-            <div>
-              <p className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                <LuShield
-                  aria-hidden
-                  className={`h-4 w-4 ${plan.includesAura ? 'text-violet-500' : 'text-emerald-500'}`}
-                />
-                <span>{plan.name}</span>
-              </p>
-              <p className="mt-1 text-xs text-zinc-500">
-                Pago confirmado. Tu primer mes ya está cubierto.
-              </p>
-            </div>
-            <p className="text-xl font-semibold tracking-tight text-zinc-900 tabular-nums">
-              {formatPriceMXN(plan.monthlyPriceCents)}
-              <span className="ml-1.5 align-middle text-[10px] font-medium tracking-normal text-zinc-500">
-                + IVA
-              </span>
+            <p className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
+              <LuShield
+                aria-hidden
+                className={`h-4 w-4 ${plan.includesAura ? 'text-violet-500' : 'text-emerald-500'}`}
+              />
+              <span>{plan.name}</span>
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Pago confirmado. Tu primer mes ya está cubierto.
             </p>
           </div>
         )}

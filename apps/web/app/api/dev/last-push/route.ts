@@ -22,12 +22,32 @@ export async function GET(request: NextRequest) {
   const userId = request.nextUrl.searchParams.get('userId') ?? undefined;
   const sinceRaw = request.nextUrl.searchParams.get('since');
   const since = sinceRaw ? new Date(sinceRaw) : undefined;
+  const all = request.nextUrl.searchParams.get('all') === '1';
+
+  const where = {
+    ...(userId ? { userId } : {}),
+    ...(since && !Number.isNaN(since.getTime()) ? { createdAt: { gte: since } } : {}),
+  };
+
+  if (all) {
+    const rows = await prisma.pushOutboxTest.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return NextResponse.json({
+      pushes: rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        endpoint: row.endpoint,
+        payload: row.payloadJson,
+        createdAt: row.createdAt.toISOString(),
+      })),
+    });
+  }
 
   const row = await prisma.pushOutboxTest.findFirst({
-    where: {
-      ...(userId ? { userId } : {}),
-      ...(since && !Number.isNaN(since.getTime()) ? { createdAt: { gte: since } } : {}),
-    },
+    where,
     orderBy: { createdAt: 'desc' },
   });
 

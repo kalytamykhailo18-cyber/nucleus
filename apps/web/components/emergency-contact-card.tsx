@@ -2,50 +2,44 @@ import { LuPhone } from 'react-icons/lu';
 import { sensuContact } from '@/lib/contact-info';
 
 /**
- * Dashboard SOS reminder.
+ * Dashboard SOS button (Juan 2026-06-23 — A.2). Big rose tappable card
+ * sized like a primary CTA so non-tech-savvy family members (Teresa
+ * Cuellar et al.) can spot it without hunting. The whole card is the
+ * `tel:` target, so a finger anywhere on it places the call.
  *
- * Renders on /dashboard for families with at least one device. The line
- * is what Juan asked for verbatim: tell the family how to escalate when
- * they themselves notice their senior needs help — press the physical
- * SOS button on the Sensu, or call the app-side dispatch number from
- * any phone. The number is rendered as a `tel:` link so a tap on mobile
- * places the call directly.
- *
- * We do NOT render a web-side SOS button on purpose. The pendant button
- * is the alarm; a web button would invite false positives and would
- * trigger the dispatch chain from the wrong place.
+ * Two ways to escalate are still surfaced on the page: the prominent
+ * dial card here, and the physical SOS button on the Sensu pendant.
+ * The web button reaches the same dispatch number device-SOS routes
+ * to, so the call lands on the same operator queue.
  */
 
 export function EmergencyContactCard() {
   const { tel: PHONE_TEL, display: PHONE_DISPLAY } = sensuContact.callcenter();
   return (
-    <section
+    <a
+      href={`tel:${PHONE_TEL}`}
       data-testid="emergency-contact-card"
-      role="region"
-      aria-label="Contacto de emergencia"
-      className="mt-8 rounded-3xl bg-rose-50 ring-1 ring-rose-200 p-5 animate-fade-up [animation-delay:200ms]"
+      role="button"
+      aria-label={`Llamar al Call Center, ${PHONE_DISPLAY}`}
+      className="mt-8 flex items-center gap-4 rounded-3xl bg-rose-600 px-5 py-5 text-white shadow-sm ring-1 ring-rose-700 transition-transform animate-fade-up [animation-delay:200ms] hover:-translate-y-0.5 active:scale-[0.99]"
     >
-      <div className="flex items-start gap-3">
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700">
-          <LuPhone aria-hidden className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 text-sm leading-relaxed text-zinc-800">
-          <p className="font-semibold tracking-tight text-zinc-900">
-            ¿Tu familiar necesita ayuda en este momento?
-          </p>
-          <p className="mt-1">
-            Presiona el botón SOS en su Sensu, o llama al{' '}
-            <a
-              href={`tel:${PHONE_TEL}`}
-              data-testid="emergency-contact-tel"
-              className="font-semibold text-rose-700 underline underline-offset-2 hover:text-rose-800"
-            >
-              {PHONE_DISPLAY}
-            </a>{' '}
-            desde tu teléfono.
-          </p>
-        </div>
+      <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/30">
+        <LuPhone aria-hidden className="h-6 w-6" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs uppercase tracking-[0.18em] text-rose-100">
+          Call Center 24/7
+        </p>
+        <p className="mt-0.5 text-lg font-semibold tracking-tight">
+          Llamar al centro
+        </p>
+        <p
+          className="mt-0.5 text-sm font-medium text-rose-50"
+          data-testid="emergency-contact-tel"
+        >
+          {PHONE_DISPLAY}
+        </p>
       </div>
-    </section>
+    </a>
   );
 }

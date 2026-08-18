@@ -16,7 +16,7 @@ export default async function LoginPage() {
   // check (e.g. the company-admin case that needs Prisma).
   const session = await auth();
   if (session?.user) {
-    const role = (session.user as { role?: 'USER' | 'ADMIN' }).role ?? null;
+    const role = (session.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' }).role ?? null;
     const userId = (session.user as { id?: string }).id ?? null;
     const landing = await resolveLandingPath({ userId, role });
     redirect(landing);

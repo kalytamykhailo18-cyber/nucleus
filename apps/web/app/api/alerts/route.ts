@@ -1,15 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import { fetchAlertsForUser, ALERTS_PAGE_SIZE } from '@/lib/alerts';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
 
   const { searchParams } = request.nextUrl;
   const limitParam = searchParams.get('limit');

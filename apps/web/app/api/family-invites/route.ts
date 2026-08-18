@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import { env } from '@/lib/env';
 import { sendEmail } from '@/lib/email-transport';
 import {
@@ -22,25 +22,17 @@ const createSchema = z.object({
   eviewDeviceId: z.string().min(1).max(64),
 });
 
-async function requireUserId(): Promise<string | null> {
-  const session = await auth();
-  return (session?.user as { id?: string } | undefined)?.id ?? null;
-}
-
 export async function GET(): Promise<NextResponse> {
-  const userId = await requireUserId();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const invites = await listInvitesForMaster(userId);
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const invites = await listInvitesForMaster(gate.userId);
   return NextResponse.json({ invites });
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const userId = await requireUserId();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
   const body = await request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {

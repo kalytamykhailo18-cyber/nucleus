@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AudiencePage } from '@/components/audience-page';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/video/upload/c_fill,g_auto,w_1200,h_630,so_0,f_jpg,q_auto/v1780582696/sensu/landing/angela-promo-2.jpg';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu para mujeres — Tú decides a dónde ir',
@@ -46,7 +46,7 @@ export default async function MujeresPage(): Promise<React.ReactElement> {
         // a dedicated /mujeres video via the inline CMS when one is
         // produced.
         videoUrl:
-          'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582696/sensu/landing/angela-promo-2.mp4',
+          '',
       }}
     />
   );

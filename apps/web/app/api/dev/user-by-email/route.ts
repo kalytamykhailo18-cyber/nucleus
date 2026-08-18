@@ -26,7 +26,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const user = await prisma.user.findFirst({
     where: { email: email.toLowerCase() },
-    select: { id: true, email: true, kind: true },
+    select: {
+      id: true,
+      email: true,
+      kind: true,
+      notificationPermission: true,
+      notificationPermissionUpdatedAt: true,
+      missedPushesCount: true,
+      lastMissedPushAt: true,
+    },
   });
   if (!user) {
     return NextResponse.json({ found: false }, { status: 404 });
@@ -36,5 +44,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     userId: user.id,
     email: user.email,
     kind: user.kind,
+    notificationPermission: user.notificationPermission,
+    notificationPermissionUpdatedAt:
+      user.notificationPermissionUpdatedAt?.toISOString() ?? null,
+    missedPushesCount: user.missedPushesCount,
+    lastMissedPushAt: user.lastMissedPushAt?.toISOString() ?? null,
   });
 }

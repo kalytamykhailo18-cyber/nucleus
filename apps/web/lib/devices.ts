@@ -45,7 +45,7 @@ export async function fetchUserDevices(userId: string): Promise<DeviceSummary[]>
             batteryLevel: { not: null },
           },
           orderBy: { timestamp: 'desc' },
-          select: { batteryLevel: true },
+          select: { batteryLevel: true, timestamp: true },
         }),
         // Latest event that actually carried a GPS fix. The freshest event
         // overall (`latestEvent`) might be a heartbeat without lat/lng, so
@@ -61,6 +61,23 @@ export async function fetchUserDevices(userId: string): Promise<DeviceSummary[]>
         }),
       ]);
 
+      // Stale-battery guard (Juan 2026-06-17). The Eview pendant only
+      // ships battery in `battery_low` events plus the now-retired
+      // seeded `heartbeat` rows. Once the seed stopped writing fakes,
+      // the latest battery reading on a healthy device can easily be
+      // weeks old. Showing "4% · last seen May 26" as the current
+      // battery is misleading — the device may be healthy and simply
+      // hasn't dipped low enough to fire a fresh battery_low event.
+      // Anything older than this window collapses to null so the card
+      // renders the neutral "no reading" gauge instead of a stale lie.
+      const BATTERY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+      const batteryAgeMs = latestBatteryEvent?.timestamp
+        ? Date.now() - latestBatteryEvent.timestamp.getTime()
+        : Number.POSITIVE_INFINITY;
+      const batteryLevel =
+        latestBatteryEvent && batteryAgeMs < BATTERY_STALE_MS
+          ? latestBatteryEvent.batteryLevel
+          : null;
       const fallbackLabel = ud.device.deviceName ?? ud.eviewDeviceId;
       return {
         deviceId: ud.eviewDeviceId,
@@ -68,7 +85,7 @@ export async function fetchUserDevices(userId: string): Promise<DeviceSummary[]>
         isPrimary: ud.isPrimary,
         deviceType: ud.device.deviceType,
         isActive: ud.device.isActive,
-        batteryLevel: latestBatteryEvent?.batteryLevel ?? null,
+        batteryLevel,
         batteryThreshold: ud.device.batteryThreshold,
         lastSeenAt: latestEvent?.timestamp
           ? latestEvent.timestamp.toISOString()

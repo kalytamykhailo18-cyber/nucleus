@@ -24,10 +24,13 @@ import {
   ADVERTISED_DISCOUNT_PCT,
   DEVICE_NET_CENTAVOS,
   SHIPPING_NET_CENTAVOS,
+  PLAN_PICKER,
   formatAmountMXN,
   grossCentsForNet,
   ivaCentsForNet,
+  isFreeShippingActive,
   type BillingCadence,
+  type PlanBInstallmentChoice,
   type PlanSummary,
 } from '@/lib/plans';
 
@@ -103,6 +106,11 @@ export function CheckoutForm({
   promo = null,
   initialCadence = null,
   initialSource = null,
+  initialRepSlug = null,
+  pickerOption = null,
+  pricingSplit = false,
+  firstMonthDelayDays = 3,
+  freeShipping = false,
 }: {
   plan: PlanSummary;
   publishableKey: string;
@@ -110,6 +118,24 @@ export function CheckoutForm({
   promo?: CheckoutPromo | null;
   initialCadence?: BillingCadence | null;
   initialSource?: string | null;
+  /** Sales-rep attribution slug from ?rep=<slug> URL param. Threaded
+   *  to /api/checkout/start so the created Subscription carries the
+   *  attribution back to the rep for commission reporting (Juan
+   *  2026-07-30 direct-sales pivot). */
+  initialRepSlug?: string | null;
+  pickerOption?: 'A' | 'B' | null;
+  /** Juan 2026-06-23 (E.1). When true, the breakdown drops the
+   *  recurring Servicio line entirely; the upfront charge becomes
+   *  just Dispositivo + Envío, and a small legend reminds the
+   *  customer that the first monthly cycle starts in N days. */
+  pricingSplit?: boolean;
+  firstMonthDelayDays?: number;
+  /** Juan 2026-06-24 free-shipping promo. When true, the Envío line
+   *  drops to $0 and a "Envío gratis durante junio" note replaces the
+   *  price. Window is server-resolved from NUCLEUS_FREE_SHIPPING_UNTIL_ISO
+   *  so flipping the env value extends or kills the promo without a
+   *  rebuild. */
+  freeShipping?: boolean;
 }) {
   const stripePromise = useMemo(() => loadStripe(publishableKey), [publishableKey]);
 
@@ -137,6 +163,11 @@ export function CheckoutForm({
   const [cadence, setCadence] = useState<BillingCadence>(
     promo?.cadenceLock ?? initialCadence ?? 'MONTHLY',
   );
+  // Plan B (Juan 2026-07-30) offers three payment shapes: pago único,
+  // 6 MSI, or 12 MSI. Default 'six' matches the pre-pivot behavior so
+  // repeat buyers see a familiar checkout. Only threaded when the URL
+  // resolves to pickerOption === 'B'.
+  const [planBChoice, setPlanBChoice] = useState<PlanBInstallmentChoice>('six');
   const cadencePricingActive = planHasCadencePricing(plan);
   const isResume = resumeData !== null;
 
@@ -164,6 +195,9 @@ export function CheckoutForm({
           cadence: cadencePricingActive ? cadence : undefined,
           promo: promo?.code,
           source: initialSource ?? undefined,
+          pickerOption: pickerOption ?? undefined,
+          planBChoice: pickerOption === 'B' ? planBChoice : undefined,
+          repSlug: initialRepSlug ?? undefined,
         }),
       });
       if (!res.ok) {
@@ -179,15 +213,29 @@ export function CheckoutForm({
     }
   }
 
+  // Plan B (annual prepay + 6 MSI, Juan 2026-06-18) has a fixed
+  // annual cadence by construction — showing the Mensual/Semestral/
+  // Anual picker on that path was confusing buyers (Juan 2026-07-15).
+  // Suppress the picker for Plan B; the summary card renders the
+  // Plan B annual copy and the recurring monthly cycle kicks in
+  // automatically at month 13.
+  const showCadencePicker = cadencePricingActive && pickerOption !== 'B';
+
   return (
     <div className="mt-8 space-y-6">
-      {cadencePricingActive ? (
+      {showCadencePicker ? (
         <CadencePicker plan={plan} cadence={cadence} setCadence={setCadence} />
       ) : null}
       <PlanSummaryCard
         plan={plan}
-        cadence={cadencePricingActive ? cadence : null}
+        cadence={showCadencePicker ? cadence : null}
         promo={promo}
+        pickerOption={pickerOption}
+        pricingSplit={pricingSplit}
+        firstMonthDelayDays={firstMonthDelayDays}
+        freeShipping={freeShipping}
+        planBChoice={planBChoice}
+        onPlanBChoiceChange={setPlanBChoice}
       />
 
       {isResume && (
@@ -311,6 +359,8 @@ export function CheckoutForm({
             password={form.password}
             subscriptionId={subscriptionId}
             skipSignin={isResume}
+            pickerOption={pickerOption}
+            planBChoice={planBChoice}
           />
         </Elements>
       )}
@@ -388,18 +438,52 @@ function PlanSummaryCard({
   plan,
   cadence,
   promo = null,
+  pickerOption = null,
+  pricingSplit = false,
+  firstMonthDelayDays = 3,
+  freeShipping = false,
+  planBChoice = 'six',
+  onPlanBChoiceChange,
 }: {
   plan: PlanSummary;
   cadence: BillingCadence | null;
   promo?: CheckoutPromo | null;
+  pickerOption?: 'A' | 'B' | null;
+  pricingSplit?: boolean;
+  firstMonthDelayDays?: number;
+  freeShipping?: boolean;
+  planBChoice?: PlanBInstallmentChoice;
+  onPlanBChoiceChange?: (choice: PlanBInstallmentChoice) => void;
 }): React.ReactElement {
+  // Plan-B picker buyers (Juan 2026-06-18, repriced 2026-07-30) get
+  // their own card — single $9,996 PaymentIntent with the buyer
+  // choosing pago único / 6 MSI / 12 MSI. Twelve months of service
+  // covered upfront, then the regular $638 monthly cycle from month 13.
+  // The standard cadence breakdown would mislead them into thinking
+  // they're paying the monthly card again on top.
+  if (pickerOption === 'B' && plan.initialFeeCents !== null) {
+    return (
+      <PlanSummaryPlanBCard
+        plan={plan}
+        choice={planBChoice}
+        onChoiceChange={onPlanBChoiceChange}
+      />
+    );
+  }
   // 2026-05-26 pricing pivot — when a cadence is selected and the plan
   // has cadence pricing configured, swap to the initial-fee + recurring
   // breakdown. Plans without cadence prices fall through to the legacy
   // "monitoring + connection + device gratis" breakdown.
   if (cadence !== null && plan.initialFeeCents !== null) {
     return (
-      <PlanSummaryCadenceCard plan={plan} cadence={cadence} promo={promo} />
+      <PlanSummaryCadenceCard
+        plan={plan}
+        cadence={cadence}
+        promo={promo}
+        pricingSplit={pricingSplit}
+        firstMonthDelayDays={firstMonthDelayDays}
+        freeShipping={freeShipping}
+      />
     );
   }
   return <PlanSummaryLegacyCard plan={plan} />;
@@ -409,41 +493,57 @@ function PlanSummaryCadenceCard({
   plan,
   cadence,
   promo = null,
+  pricingSplit = false,
+  firstMonthDelayDays = 3,
+  freeShipping = false,
 }: {
   plan: PlanSummary;
   cadence: BillingCadence;
   promo?: CheckoutPromo | null;
+  pricingSplit?: boolean;
+  firstMonthDelayDays?: number;
+  freeShipping?: boolean;
 }): React.ReactElement {
-  // Device + activation are the upfront one-time line items. The
-  // recurring side carries the chosen cadence's net price.
-  const ACTIVATION_NET = Math.max(
-    0,
-    (plan.initialFeeCents ?? 0) - DEVICE_NET_CENTAVOS,
-  );
+  // Initial fee covers the device + activation rolled together (Juan
+  // 2026-06-19: "take out the Activación row, leave Dispositivo Angela
+  // at $2,122"). Single line keeps the breakdown punchy without
+  // changing the net or the gross — the activation cents still live
+  // inside Plan.initialFeeCents, they're just no longer broken out.
+  const initialFeeNet = plan.initialFeeCents ?? DEVICE_NET_CENTAVOS;
   const recurringNet = cadencePriceCents(plan, cadence) ?? 0;
+  const shippingNet = freeShipping ? 0 : SHIPPING_NET_CENTAVOS;
+  // Juan 2026-07-20: when Sensu absorbs shipping, the Envío row is
+  // dropped entirely instead of rendering "$0" or a "gratis durante
+  // junio" note. The buyer's Pago único hoy is Dispositivo + IVA only.
   const oneTimeItems: Array<{ label: string; sub?: string; cents: number }> = [
     {
       label: 'Dispositivo Angela',
-      sub: 'Pendant + correa + estuche. Pago único.',
-      cents: DEVICE_NET_CENTAVOS,
+      sub: 'Pendant + correa + cargador y clip, activación incluida. Pago único.',
+      cents: initialFeeNet,
     },
-    {
-      label: 'Activación celular',
-      sub: 'Configuración de la SIM y prueba de cobertura.',
-      cents: ACTIVATION_NET,
-    },
-    {
-      label: 'Envío',
-      sub: 'Mensajería a tu domicilio en México. Pago único.',
-      cents: SHIPPING_NET_CENTAVOS,
-    },
+    ...(freeShipping
+      ? []
+      : [
+          {
+            label: 'Envío',
+            sub: 'Mensajería a tu domicilio en México. Pago único.',
+            cents: shippingNet,
+          },
+        ]),
   ];
   const recurringItem = {
     label: `Servicio ${CADENCE_LABEL[cadence]}`,
     sub: 'Monitoreo 24/7, call-center, panel familiar y soporte humano.',
     cents: recurringNet,
   };
-  const subtotalNet = oneTimeItems.reduce((s, i) => s + i.cents, 0) + recurringNet;
+  // When the pricing split is active, the recurring Servicio is NOT
+  // charged today (Juan 2026-06-23 — E.1). The renewal worker fires
+  // the first $638 monthly cycle `firstMonthDelayDays` days after the
+  // upfront payment. The breakdown drops the recurring line entirely
+  // and the legend below the total reminds the buyer of the schedule.
+  const subtotalNet =
+    oneTimeItems.reduce((s, i) => s + i.cents, 0) +
+    (pricingSplit ? 0 : recurringNet);
   const ivaCents = ivaCentsForNet(subtotalNet);
   // Promo discount applied to the gross total. PEMEX10 (and any future
   // applyToInitialFee=true partner code) discounts the WHOLE annual
@@ -485,26 +585,34 @@ function PlanSummaryCadenceCard({
               <p className="mt-0.5 text-xs leading-snug text-zinc-500">{item.sub}</p>
             </div>
             <p className="shrink-0 text-sm tabular-nums text-zinc-700">
-              {formatAmountMXN(item.cents)}
+              {item.cents === 0 ? (
+                <span className="font-medium text-emerald-700">Gratis</span>
+              ) : (
+                formatAmountMXN(item.cents)
+              )}
             </p>
           </li>
         ))}
       </ul>
 
-      <p className="mt-5 text-xs uppercase tracking-[0.14em] text-zinc-500">
-        Servicio recurrente
-      </p>
-      <ul className="mt-2 space-y-3">
-        <li className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm text-zinc-900">{recurringItem.label}</p>
-            <p className="mt-0.5 text-xs leading-snug text-zinc-500">{recurringItem.sub}</p>
-          </div>
-          <p className="shrink-0 text-sm tabular-nums text-zinc-700">
-            {formatAmountMXN(recurringItem.cents)}
+      {!pricingSplit && (
+        <>
+          <p className="mt-5 text-xs uppercase tracking-[0.14em] text-zinc-500">
+            Servicio recurrente
           </p>
-        </li>
-      </ul>
+          <ul className="mt-2 space-y-3">
+            <li className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm text-zinc-900">{recurringItem.label}</p>
+                <p className="mt-0.5 text-xs leading-snug text-zinc-500">{recurringItem.sub}</p>
+              </div>
+              <p className="shrink-0 text-sm tabular-nums text-zinc-700">
+                {formatAmountMXN(recurringItem.cents)}
+              </p>
+            </li>
+          </ul>
+        </>
+      )}
 
       <div className="mt-5 space-y-2 border-t border-zinc-100 pt-4 text-sm">
         <div className="flex items-center justify-between text-zinc-600">
@@ -556,32 +664,205 @@ function PlanSummaryCadenceCard({
             unambiguous that the one-time device + activación drop off
             after the first cycle and only the servicio recurs. The
             cycle noun adapts to the chosen cadence. */}
-        <div
-          data-testid="checkout-plan-recurring-amount"
-          className="mt-3 flex items-center justify-between border-t border-zinc-100 pt-3 text-sm text-zinc-700"
-        >
-          <span>
-            Pago desde el{' '}
-            {cadence === 'MONTHLY'
+        {(() => {
+          // Cadence-aware nouns for the recurring copy. Previously the
+          // `pricingSplit` (Plan A) branch hardcoded "mensual" and
+          // "cada mes" even when the buyer picked Semestral or Anual on
+          // the cadence picker — Juan caught the mismatch 2026-07-20.
+          const serviceAdj =
+            cadence === 'MONTHLY'
+              ? 'mensual'
+              : cadence === 'SEMESTRAL'
+                ? 'semestral'
+                : 'anual';
+          const renewalPeriod =
+            cadence === 'MONTHLY'
               ? 'mes'
               : cadence === 'SEMESTRAL'
                 ? 'semestre'
-                : 'año'}{' '}
-            2 en adelante
-          </span>
-          <span className="tabular-nums">
-            {formatAmountMXN(grossCentsForNet(recurringNet))}
-          </span>
-        </div>
+                : 'año';
+          return (
+            <>
+              <div
+                data-testid="checkout-plan-recurring-amount"
+                className="mt-3 flex items-center justify-between border-t border-zinc-100 pt-3 text-sm text-zinc-700"
+              >
+                <span>
+                  {pricingSplit
+                    ? `Servicio ${serviceAdj} desde el día ${firstMonthDelayDays + 1}`
+                    : `Pago desde el ${renewalPeriod} 2 en adelante`}
+                </span>
+                <span className="tabular-nums">
+                  {formatAmountMXN(grossCentsForNet(recurringNet))}
+                </span>
+              </div>
+              <p
+                data-testid="checkout-plan-recurring"
+                className="pt-2 text-[11px] leading-snug text-zinc-500"
+              >
+                {pricingSplit ? (
+                  <>
+                    Hoy solo pagas el dispositivo y el envío. El servicio{' '}
+                    {serviceAdj} de{' '}
+                    <strong className="font-medium text-zinc-700">
+                      {formatAmountMXN(grossCentsForNet(recurringNet))}
+                    </strong>{' '}
+                    se cobra automáticamente {firstMonthDelayDays} días
+                    después en la misma tarjeta y se renueva cada{' '}
+                    {renewalPeriod} a partir de ahí.
+                  </>
+                ) : (
+                  <>
+                    Después del primer ciclo, se renueva automáticamente
+                    cada {renewalPeriod} al precio de{' '}
+                    {CADENCE_LABEL[cadence].toLowerCase()} más IVA.
+                  </>
+                )}
+              </p>
+            </>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+function PlanSummaryPlanBCard({
+  plan,
+  choice,
+  onChoiceChange,
+}: {
+  plan: PlanSummary;
+  choice: PlanBInstallmentChoice;
+  onChoiceChange?: (choice: PlanBInstallmentChoice) => void;
+}): React.ReactElement {
+  // Plan B (Juan 2026-06-18, repriced 2026-07-30) is a single
+  // PaymentIntent annual prepay of $9,996 gross. IVA is folded into the
+  // headline — no line breakdown on this card. The buyer picks one of
+  // three payment shapes: pago único (one card charge), 6 MSI, or
+  // 12 MSI. Selection determines what we pass to
+  // stripe.confirmPayment({installments.plan}).
+  //
+  // The renewal worker takes over at month 13 with the standard $638
+  // monthly cycle off the same card regardless of the shape picked.
+  const annualGross = grossCentsForNet(PLAN_PICKER.B.annualNetCentavos);
+  const monthlyRecurringNet = plan.priceMonthlyCents ?? 0;
+  const monthlyRecurringGross = grossCentsForNet(monthlyRecurringNet);
+
+  const choiceOptions: Array<{
+    key: PlanBInstallmentChoice;
+    label: string;
+    perCycleGross: number;
+    footnote: string;
+  }> = [
+    {
+      key: 'single',
+      label: 'Pago único',
+      perCycleGross: annualGross,
+      footnote: 'Se cobra hoy en tu tarjeta.',
+    },
+    {
+      key: 'six',
+      label: '6 MSI',
+      perCycleGross: Math.round(annualGross / 6),
+      footnote: 'Tu banco lo divide en 6 pagos mensuales sin intereses.',
+    },
+    {
+      key: 'twelve',
+      label: '12 MSI',
+      perCycleGross: Math.round(annualGross / 12),
+      footnote: 'Tu banco lo divide en 12 pagos mensuales sin intereses.',
+    },
+  ];
+  const active = choiceOptions.find((o) => o.key === choice) ?? choiceOptions[1]!;
+
+  return (
+    <div
+      data-testid="checkout-plan"
+      className="card-surface rounded-3xl px-6 py-5 animate-fade-up"
+    >
+      <p className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
+        <LuShield aria-hidden className="h-4 w-4 text-emerald-500" />
+        <span data-testid="checkout-plan-name">{plan.name} — Plan Anual</span>
+      </p>
+
+      <div className="mt-5 flex items-baseline justify-between gap-3">
+        <p className="text-sm text-zinc-700">Plan anual todo incluido</p>
         <p
-          data-testid="checkout-plan-recurring"
-          className="pt-2 text-[11px] leading-snug text-zinc-500"
+          data-testid="checkout-plan-b-annual-gross"
+          className="text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums"
         >
-          Después del primer ciclo, se renueva automáticamente cada{' '}
-          {cadence === 'MONTHLY' ? 'mes' : cadence === 'SEMESTRAL' ? 'semestre' : 'año'}{' '}
-          al precio de {CADENCE_LABEL[cadence].toLowerCase()} más IVA.
+          {formatAmountMXN(annualGross)}
         </p>
       </div>
+      <p className="mt-1 text-xs text-zinc-500">IVA incluido.</p>
+
+      <div className="mt-5">
+        <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">
+          Elige cómo pagar
+        </p>
+        <div
+          data-testid="checkout-plan-b-installments"
+          role="radiogroup"
+          aria-label="Elige cómo pagar"
+          className="mt-2 grid gap-2 sm:grid-cols-3"
+        >
+          {choiceOptions.map((opt) => {
+            const isActive = opt.key === choice;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                role="radio"
+                aria-checked={isActive}
+                data-testid={`checkout-plan-b-installments-${opt.key}`}
+                onClick={() => onChoiceChange?.(opt.key)}
+                className={`flex flex-col items-start rounded-2xl px-4 py-3 text-left transition-transform hover:-translate-y-0.5 cursor-pointer ${
+                  isActive
+                    ? 'bg-zinc-900 text-white ring-2 ring-zinc-900'
+                    : 'bg-white text-zinc-900 ring-1 ring-zinc-200 hover:bg-zinc-50'
+                }`}
+              >
+                <span className="text-sm font-medium tracking-tight">
+                  {opt.label}
+                </span>
+                <span
+                  className={`mt-1 text-sm tabular-nums ${
+                    isActive ? 'text-white' : 'text-zinc-700'
+                  }`}
+                >
+                  {formatAmountMXN(opt.perCycleGross)}
+                  {opt.key === 'single' ? ' hoy' : ' al mes'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p
+          data-testid="checkout-plan-b-installments-footnote"
+          className="mt-2 text-xs text-zinc-500"
+        >
+          {active.footnote}
+        </p>
+      </div>
+
+      <div className="mt-5 rounded-2xl bg-zinc-50 px-4 py-3 ring-1 ring-zinc-100">
+        <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">
+          Incluye 12 meses de servicio
+        </p>
+        <p className="mt-1 text-sm leading-snug text-zinc-700">
+          Dispositivo Angela, activación celular, envío y monitoreo 24/7 con
+          call-center durante el primer año.
+        </p>
+      </div>
+
+      {/* Juan 2026-08-13: pulled the "a partir del mes 13" monthly
+          switchover copy from the annual plan checkout. Renewals on
+          the annual plan will be billed annually going forward, so
+          the previous copy that promised a monthly cadence starting
+          month 13 was misleading. The renewal cadence itself needs
+          a separate follow-up on the worker side to actually charge
+          $9,996 again at month 13 instead of switching to monthly. */}
     </div>
   );
 }
@@ -775,12 +1056,22 @@ function PaymentSection({
   password,
   subscriptionId,
   skipSignin = false,
+  pickerOption = null,
+  planBChoice = 'six',
 }: {
   email: string;
   password: string;
   subscriptionId: string;
   /** Resume flow: the user is already authenticated, skip the signIn call. */
   skipSignin?: boolean;
+  /** Plan-picker option threaded from CheckoutForm. Plan B forces the
+   *  buyer-selected installment plan at confirm time (Stripe rejects
+   *  this same parameter at create-time, so we set it here). */
+  pickerOption?: 'A' | 'B' | null;
+  /** Buyer's payment-shape choice for Plan B: pago único / 6 MSI /
+   *  12 MSI. Ignored for Plan A. Default 'six' matches the pre-pivot
+   *  behavior. */
+  planBChoice?: PlanBInstallmentChoice;
 }) {
   const stripe: Stripe | null = useStripe();
   const elements: StripeElements | null = useElements();
@@ -788,6 +1079,19 @@ function PaymentSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const startedRef = useRef(false);
+
+  // For Plan B, translate the buyer's choice into the Stripe
+  // installments payload. `single` means we omit `installments` from
+  // confirm — Stripe then charges the card as a normal one-shot
+  // purchase. `six` / `twelve` force the corresponding MSI plan.
+  const planBInstallmentPayload = (() => {
+    if (pickerOption !== 'B') return undefined;
+    if (planBChoice === 'single') return undefined;
+    if (planBChoice === 'six') {
+      return { plan: PLAN_PICKER.B.msiOptions.six } as const;
+    }
+    return { plan: PLAN_PICKER.B.msiOptions.twelve } as const;
+  })();
 
   async function pay(): Promise<void> {
     if (!stripe || !elements || startedRef.current) return;
@@ -797,7 +1101,18 @@ function PaymentSection({
 
     const result = await stripe.confirmPayment({
       elements,
-      confirmParams: { return_url: `${window.location.origin}/checkout/return` },
+      confirmParams: {
+        return_url: `${window.location.origin}/checkout/return`,
+        ...(planBInstallmentPayload
+          ? {
+              payment_method_options: {
+                card: {
+                  installments: planBInstallmentPayload,
+                },
+              },
+            }
+          : {}),
+      },
       redirect: 'if_required',
     });
 

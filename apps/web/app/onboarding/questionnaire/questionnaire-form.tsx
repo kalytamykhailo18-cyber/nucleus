@@ -139,22 +139,39 @@ export function QuestionnaireForm({
   const altShippingSatisfied =
     !useAltShipping || shippingAddress.trim().length > 0;
 
-  const canSubmit =
-    !busy &&
-    seniorName.trim().length > 0 &&
-    dob.length > 0 &&
-    curp.trim().length > 0 &&
-    curpValid &&
-    address.trim().length > 0 &&
-    altShippingSatisfied &&
-    seniorPhoneSatisfied &&
-    contacts.length > 0 &&
-    contacts.every(
-      (c) =>
-        c.fullName.trim().length > 0 &&
-        c.phone.trim().length > 0 &&
-        c.relationship.trim().length > 0,
-    );
+  // CURP removed from the required-fields gate (Juan 2026-06-23 — A.5).
+  // The state + regex stay in place so the older Aura affiliate path
+  // (which used to lean on CURP) still compiles cleanly, but the
+  // questionnaire UI no longer asks for it and the submit no longer
+  // gates on it.
+  // Surface every missing required field by name so the buyer never
+  // stares at a silently-disabled CTA wondering what's wrong. Juan
+  // 2026-06-27: the auto-filled first contact lands with empty phone
+  // when the buyer's profile has no phone on file, and a customer
+  // testing the flow could not figure out why "Activar mi Sensu"
+  // stayed gray. Each missing field below maps to the same input
+  // they need to fill in.
+  const missingFields: string[] = [];
+  if (seniorName.trim().length === 0) missingFields.push('Nombre del usuario');
+  if (dob.length === 0) missingFields.push('Fecha de nacimiento');
+  if (address.trim().length === 0) missingFields.push('Dirección');
+  if (!altShippingSatisfied) missingFields.push('Dirección de envío');
+  if (!seniorPhoneSatisfied) missingFields.push('Teléfono del usuario');
+  if (contacts.length === 0) {
+    missingFields.push('Al menos un contacto de emergencia');
+  } else {
+    contacts.forEach((c, i) => {
+      const missing: string[] = [];
+      if (c.fullName.trim().length === 0) missing.push('nombre');
+      if (c.phone.trim().length === 0) missing.push('teléfono');
+      if (c.relationship.trim().length === 0) missing.push('parentesco');
+      if (missing.length > 0) {
+        missingFields.push(`Contacto ${i + 1}: ${missing.join(', ')}`);
+      }
+    });
+  }
+
+  const canSubmit = !busy && missingFields.length === 0;
 
   async function submit(): Promise<void> {
     setBusy(true);
@@ -167,7 +184,7 @@ export function QuestionnaireForm({
           fullName: seniorName.trim(),
           dateOfBirth: dob,
           gender,
-          curp: curp.trim().toUpperCase(),
+          curp: curp.trim() ? curp.trim().toUpperCase() : null,
           userPhone: userPhone.trim() || null,
           address: address.trim(),
           shippingAddress: useAltShipping
@@ -266,42 +283,10 @@ export function QuestionnaireForm({
             </select>
           </label>
 
-          <label className="text-sm sm:col-span-2">
-            <span className="text-xs uppercase tracking-[0.14em] text-zinc-500">
-              CURP
-            </span>
-            <input
-              type="text"
-              data-testid="q-curp"
-              value={curp}
-              onChange={(e) => setCurp(e.target.value.toUpperCase())}
-              placeholder="RIVR990317HDFVRN09"
-              maxLength={18}
-              required
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={curp.length > 0 && !curpValid ? true : undefined}
-              className={`mt-1.5 block w-full rounded-xl border bg-white px-3 py-2 font-mono text-zinc-900 outline-none focus:ring-2 ${
-                curp.length > 0 && !curpValid
-                  ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-200'
-                  : 'border-zinc-200 focus:border-sensu-400 focus:ring-sensu-200'
-              }`}
-            />
-            <span className="mt-1 block text-[11px] leading-snug text-zinc-500">
-              Estructura oficial: 4 letras + AAMMDD + H/M + 5 letras + letra + dígito (ej. RIVR990317HDFVRN09).
-              Es la CURP del usuario de la Angela, no la tuya — la pedimos para poder
-              brindar servicios de ambulancia, atención médica o asistencia vial si se necesita.
-              {curp.length > 0 && curp.length < 18 ? (
-                <span className="ml-1 text-rose-600">
-                  Faltan {18 - curp.length} carácter{18 - curp.length === 1 ? '' : 'es'}.
-                </span>
-              ) : curp.length === 18 && !curpValid ? (
-                <span className="ml-1 text-rose-600">
-                  Formato inválido — revisa el orden de letras y dígitos.
-                </span>
-              ) : null}
-            </span>
-          </label>
+          {/* CURP field removed 2026-06-23 (Juan A.5). State + validator
+              regex above stay so older Aura affiliate paths still
+              compile; the questionnaire no longer prompts for it and
+              the submit no longer sends it. */}
 
 
           <label className="text-sm sm:col-span-2">
@@ -658,6 +643,23 @@ export function QuestionnaireForm({
           <LuCircleAlert aria-hidden className="h-4 w-4 shrink-0 text-rose-500" />
           {error}
         </p>
+      )}
+
+      {missingFields.length > 0 && (
+        <div
+          data-testid="q-missing-fields"
+          role="status"
+          className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200"
+        >
+          <p className="font-medium">
+            Para activar tu Sensu falta capturar:
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-amber-800">
+            {missingFields.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className="sticky bottom-3 z-10 flex justify-end">

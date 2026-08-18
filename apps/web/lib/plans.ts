@@ -172,22 +172,43 @@ export const IVA_RATE = 0.16;
 
 /**
  * Net centavos for the one-time Dispositivo Angela line — the pendant
- * + correa + estuche bundle. Matches the value used by the checkout
+ * + correa + cargador y clip bundle. Matches the value used by the checkout
  * breakdown so the email and the start-API agree on what "device"
  * means without parsing it out of `Plan.initialFeeCents`.
  */
 export const DEVICE_NET_CENTAVOS = 200_000;
 
 /**
- * Net centavos for the Envío (shipping) line — Juan 2026-05-28: the
- * customer pays a $500 MXN shipping fee, gross (IVA-included). Net =
- * 500 / 1.16 = 431.03, so 43_103 cents lands at $500 gross within
- * one centavo of rounding ($499.99 displayed via Math.floor on cents).
+ * Net centavos for the Envío (shipping) line. Updated 2026-06-19 (Juan)
+ * — the customer pays a $250 MXN shipping fee, gross (IVA-included).
+ * Net = 250 / 1.16 = 215.52, so 21_552 cents lands at $250 gross within
+ * one centavo of rounding. Was $500 from 2026-05-28 to 2026-06-19, halved
+ * once the Plan A + Plan B picker rolled out to bring the upfront
+ * line in tighter with the device + activation total.
  * Kept as a single constant since shipping is flat across plans and
  * cadences for now; refactor to a per-Plan column if regional rates
  * land later.
  */
-export const SHIPPING_NET_CENTAVOS = 43_103;
+export const SHIPPING_NET_CENTAVOS = 21_552;
+
+/**
+ * Free-shipping promo window (Juan 2026-06-24). Returns true when the
+ * `NUCLEUS_FREE_SHIPPING_UNTIL_ISO` env value is a parseable ISO
+ * datetime that is still in the future at call time. Callers should
+ * substitute `0` for `SHIPPING_NET_CENTAVOS` when this is true AND
+ * surface a "Envío gratis" note to the buyer so the breakdown adds
+ * up without a hidden discount line.
+ *
+ * The check lives here (not in env.ts) so server + client callers
+ * resolve the same boolean from the same import — env.ts only owns
+ * the raw ISO string, this function owns the date comparison.
+ */
+export function isFreeShippingActive(nowMs: number, untilIso: string | null): boolean {
+  if (!untilIso) return false;
+  const ts = Date.parse(untilIso);
+  if (!Number.isFinite(ts)) return false;
+  return nowMs < ts;
+}
 
 /** IVA portion (cents) for a given net price (cents). Rounded half-up. */
 export function ivaCentsForNet(netCents: number): number {
@@ -197,4 +218,59 @@ export function ivaCentsForNet(netCents: number): number {
 /** Gross price (cents) = net + IVA. This is what Stripe actually charges. */
 export function grossCentsForNet(netCents: number): number {
   return netCents + ivaCentsForNet(netCents);
+}
+
+/**
+ * Plan-picker pre-scope (Juan 2026-06-18, repriced 2026-07-30). Two
+ * side-by-side checkout options behind `NEXT_PUBLIC_PLAN_PICKER_ENABLED`:
+ *
+ *   A · Inicial + mensualidad — $2,122 MXN net ($2,461 gross) initial
+ *       fee covering device + activation, plus the $250 gross envío
+ *       line, then $638 MXN gross/month on the existing renewal-
+ *       worker cycle.
+ *   B · Anual flexible        — $9,996 MXN gross single PaymentIntent
+ *       on the customer's card. The buyer picks one of three payment
+ *       shapes on the checkout summary card:
+ *         - `single`  → one card charge of $9,996 today, no installments.
+ *         - `six`     → 6 MSI (~$1,666/mo on the card statement).
+ *         - `twelve`  → 12 MSI (~$833/mo on the card statement).
+ *       The selected `msi` plan is passed to
+ *       `stripe.confirmPayment({payment_method_options.card.installments.plan})`
+ *       at confirm time. From month 13 onwards the renewal worker
+ *       takes over with the normal $638 monthly cadence regardless of
+ *       which payment shape the buyer picked. All-inclusive: IVA is
+ *       folded into the $9,996, no separate line on checkout (Juan
+ *       2026-07-30).
+ *
+ * Stored as net centavos so the IVA path stays consistent with every
+ * other Stripe-bound amount in this file.
+ */
+export const PLAN_PICKER = {
+  A: {
+    key: 'initial_plus_monthly' as const,
+    initialFeeNetCentavos: grossToNet(246_100),
+    recurringCadence: 'MONTHLY' as const,
+    msi: null,
+  },
+  B: {
+    key: 'annual_flexible' as const,
+    annualNetCentavos: grossToNet(999_600),
+    msiOptions: {
+      six: { count: 6, interval: 'month', type: 'fixed_count' },
+      twelve: { count: 12, interval: 'month', type: 'fixed_count' },
+    },
+    handoffToMonthlyAfterMonths: 12,
+  },
+} as const;
+
+/** Payment shape the buyer picks on the Plan B card. `single` means no
+ *  installments (one card charge). `six` / `twelve` map to the entries
+ *  in `PLAN_PICKER.B.msiOptions` and force that MSI plan on Stripe. */
+export type PlanBInstallmentChoice = 'single' | 'six' | 'twelve';
+
+/** Inverse of grossCentsForNet — given a target gross amount in cents,
+ * compute the net cents that round back to it. Used by the plan-picker
+ * constants where Juan stated the headline price gross. */
+function grossToNet(grossCents: number): number {
+  return Math.round(grossCents / (1 + IVA_RATE));
 }

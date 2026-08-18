@@ -17,6 +17,28 @@ const nextConfig = {
       ],
     },
   },
+  async rewrites() {
+    return [
+      {
+        // Digital Asset Links for the Android TWA. Chrome verifies
+        // this URL when launching the app to prove the app-package
+        // signing key is authorized for this origin. Backed by the
+        // API route so the fingerprint list is env-driven.
+        source: '/.well-known/assetlinks.json',
+        destination: '/api/well-known/assetlinks',
+      },
+      {
+        // Apple App Site Association — iOS Universal Links + App
+        // Clip verification. Fetched by iOS on first launch. Must
+        // NOT carry a `.json` extension in the URL path (Apple's
+        // fetcher rejects it), so the source path is exactly what
+        // Apple asks for and the destination is the extensionless
+        // API route.
+        source: '/.well-known/apple-app-site-association',
+        destination: '/api/well-known/apple-app-site-association',
+      },
+    ];
+  },
 };
 
 export default nextConfig;

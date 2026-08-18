@@ -62,17 +62,26 @@ export function AdminDispatchClient({
     if (!el) return;
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setFocusedId(focusSubscriptionId);
-    // If the focused subscription is in the activation queue, auto-open
-    // the Emparejar modal so the admin lands one click ahead.
+    // Auto-open whichever modal the focused row qualifies for so the
+    // admin lands one click ahead. Activation queue requires the
+    // subscription to be shipped already; otherwise the row sits in
+    // the shipping queue and we open Marcar enviado first (Juan
+    // 2026-06-23 — B.1 cross-link to dispatch was dropping the user
+    // on a quiet page with no obvious next step on unshipped rows).
     const activateRow = initialActivating.find(
       (r) => r.subscriptionId === focusSubscriptionId,
     );
     if (activateRow) {
       setPendingActivate(activateRow);
+    } else {
+      const shipRow = initialShipping.find(
+        (r) => r.subscriptionId === focusSubscriptionId,
+      );
+      if (shipRow) setPendingShip(shipRow);
     }
     const t = window.setTimeout(() => setFocusedId(null), 2500);
     return () => window.clearTimeout(t);
-  }, [focusSubscriptionId, initialActivating]);
+  }, [focusSubscriptionId, initialActivating, initialShipping]);
 
   const close = (): void => {
     if (busy) return;

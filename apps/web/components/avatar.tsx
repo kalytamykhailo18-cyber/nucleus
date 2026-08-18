@@ -1,10 +1,20 @@
-import type { ReactElement } from 'react';
+'use client';
+
+import { useEffect, useState, type ReactElement } from 'react';
 
 /**
- * User avatar primitive. Renders the supplied image URL when present;
- * otherwise renders the user's initials in a coloured circle keyed to
- * the name (deterministic per user, so the same person always gets
- * the same tone across surfaces).
+ * User avatar primitive. Renders the supplied image URL when present
+ * AND loadable; otherwise renders the user's initials in a coloured
+ * circle keyed to the name (deterministic per user, so the same person
+ * always gets the same tone across surfaces).
+ *
+ * Client component because the image may load OR fail at runtime, and
+ * a broken URL must fall back to the initials block — not stay as an
+ * empty broken-icon circle. 2026-06-26: hardened after the upstream
+ * Cloudinary cloud was disabled and every existing avatar 401'd; the
+ * graceful fallback is what keeps the dashboard from looking gutted
+ * while users re-upload via /profile (which now writes to our own
+ * /uploads mount instead of the dead third-party host).
  */
 
 const TONES: Array<{ bg: string; fg: string }> = [
@@ -59,12 +69,19 @@ export function Avatar({
   testId,
 }: AvatarProps): ReactElement {
   const sizeCls = SIZE_CLASS[size];
-  if (src) {
+  const [broken, setBroken] = useState(false);
+  // Reset the broken flag whenever src changes. Without this, the
+  // very first onError flips broken=true and the component is stuck
+  // rendering initials forever — even after a brand-new working URL
+  // arrives from the picker.
+  useEffect(() => { setBroken(false); }, [src]);
+  if (src && !broken) {
     return (
       <img
         src={src}
         alt=""
         data-testid={testId}
+        onError={() => setBroken(true)}
         className={`inline-block ${sizeCls} shrink-0 rounded-full object-cover ring-1 ring-zinc-200/70 ${className ?? ''}`}
       />
     );

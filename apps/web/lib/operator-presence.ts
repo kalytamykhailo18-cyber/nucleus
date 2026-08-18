@@ -4,7 +4,7 @@ import { ALERT_EVENT_TYPES } from '@/lib/alerts';
 /**
  * Operator presence + load (Phase B polish, 2026-06-10).
  *
- * "En turno ahora" = any ADMIN whose `lastOperatorPingAt` has been
+ * "En turno ahora" = any ADMIN or CALLCENTER whose `lastOperatorPingAt` has been
  * bumped by the /api/admin/operator/heartbeat endpoint within the last
  * 60 s. Load = how many actionable EviewEvents have this operator as
  * the author of their most recent OperatorAction AND that latest action
@@ -33,7 +33,10 @@ export async function fetchOperatorPresence(): Promise<OperatorPresence[]> {
 
   const onShift = await prisma.user.findMany({
     where: {
-      role: 'ADMIN',
+      // Anyone with operator-board access — ADMIN god-role + the
+      // narrower CALLCENTER dispatcher role. Both call /api/admin/operator/heartbeat
+      // while the tab is open, so both appear on the presence panel.
+      role: { in: ['ADMIN', 'CALLCENTER'] },
       lastOperatorPingAt: { gte: cutoff },
     },
     select: {

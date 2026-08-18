@@ -2,7 +2,10 @@ import { redirect } from 'next/navigation';
 import { Prisma } from '@prisma/client';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
-import { NON_FIXTURE_USER_FILTER } from '@/lib/admin-exclusions';
+import {
+  NON_FIXTURE_USER_FILTER,
+  STRICT_NON_FIXTURE_USER_FILTER,
+} from '@/lib/admin-exclusions';
 
 /**
  * Server-side guard for admin routes. Returns the admin user's id if
@@ -11,7 +14,28 @@ import { NON_FIXTURE_USER_FILTER } from '@/lib/admin-exclusions';
  *
  * Use as the first call in any server component / route under /admin.
  */
-export async function requireAdmin(): Promise<{ id: string; email: string }> {
+export type AdminRole = 'ADMIN' | 'CALLCENTER' | 'SALES';
+
+export interface AdminGuardResult {
+  id: string;
+  email: string;
+  role: AdminRole;
+  /** True when the viewer should see the strict (real-customer-only)
+   *  filter on every admin surface. CALLCENTER role implies true
+   *  automatically; ADMIN can opt in by setting `User.callcenterMode`. */
+  callcenterMode: boolean;
+}
+
+/** Per-role landing page when a narrower role attempts an ADMIN-only
+ * surface. CALLCENTER → operator queue; SALES → payment-link tool;
+ * everyone else → family dashboard. */
+function homeForRole(role: string): string {
+  if (role === 'CALLCENTER') return '/admin/operator';
+  if (role === 'SALES') return '/admin/assisted-sales';
+  return '/dashboard';
+}
+
+export async function requireAdmin(): Promise<AdminGuardResult> {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) {
@@ -19,15 +43,152 @@ export async function requireAdmin(): Promise<{ id: string; email: string }> {
   }
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, role: true },
+    select: { id: true, email: true, role: true, callcenterMode: true },
   });
   if (!user) {
     redirect('/login?next=%2Fadmin');
   }
   if (user.role !== 'ADMIN') {
+    // Narrower roles can't reach ADMIN-only routes. Bounce them to
+    // their per-role home (CALLCENTER → /admin/operator, SALES →
+    // /admin/assisted-sales, everyone else → /dashboard).
+    redirect(homeForRole(user.role));
+  }
+  return {
+    id: user.id,
+    email: user.email,
+    role: 'ADMIN',
+    callcenterMode: user.callcenterMode,
+  };
+}
+
+/**
+ * Looser admin gate that lets ADMIN and SALES pass. Use this on
+ * /admin/assisted-sales (page + create-link route). CALLCENTER and
+ * everyone else bounce to their own home. Returned shape matches
+ * `requireAdmin` so the caller can reuse it interchangeably.
+ */
+export async function requireSalesOrAdmin(): Promise<AdminGuardResult> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    redirect('/login?next=%2Fadmin%2Fassisted-sales');
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, role: true, callcenterMode: true },
+  });
+  if (!user) {
+    redirect('/login?next=%2Fadmin%2Fassisted-sales');
+  }
+  if (user.role !== 'ADMIN' && user.role !== 'SALES') {
+    redirect(homeForRole(user.role));
+  }
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role as AdminRole,
+    callcenterMode: user.callcenterMode,
+  };
+}
+
+/**
+ * Family-side API guard. Counterpart to `requireFamilySession()` for
+ * route handlers that fetch instead of render. Returns a discriminated
+ * union so the caller can short-circuit with NextResponse.json():
+ *
+ *   const gate = await requireFamilyApiAuth();
+ *   if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+ *   const userId = gate.userId;
+ *
+ * Rejection codes:
+ *   - 401 when no session at all (visitor or expired cookie).
+ *   - 403 when the session is a CALLCENTER dispatcher — those accounts
+ *     have no business mutating family data even if they technically
+ *     own zero of it; principle-of-least-privilege says block outright.
+ *
+ * ADMIN passes — admins can still hit family routes from tooling.
+ */
+export async function requireFamilyApiAuth(): Promise<
+  | { ok: true; userId: string }
+  | { ok: false; status: 401 | 403; body: { error: string } }
+> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    return { ok: false, status: 401, body: { error: 'unauthorized' } };
+  }
+  const role =
+    (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' } | undefined)
+      ?.role ?? 'USER';
+  if (role === 'CALLCENTER') {
+    return {
+      ok: false,
+      status: 403,
+      body: { error: 'forbidden_callcenter_role' },
+    };
+  }
+  return { ok: true, userId };
+}
+
+/**
+ * Family-side page guard. Bounces visitors → /login (preserving the
+ * intended destination via the `next` query param) and CALLCENTER
+ * dispatchers → /admin/operator. ADMIN passes — they can tour the
+ * family surfaces. Returns the resolved user id + role for the
+ * caller's downstream queries.
+ *
+ * Use on every page under /profile, /geofences, /onboarding so a
+ * dispatcher account cannot accidentally land on the customer-facing
+ * UI (no relevant data + confusing chrome).
+ */
+export async function requireFamilySession(
+  intendedPath: string,
+): Promise<{ id: string; role: 'USER' | 'ADMIN' | 'CALLCENTER' }> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    redirect(`/login?next=${encodeURIComponent(intendedPath)}`);
+  }
+  const role =
+    (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' } | undefined)
+      ?.role ?? 'USER';
+  if (role === 'CALLCENTER') {
+    redirect('/admin/operator');
+  }
+  return { id: userId, role };
+}
+
+/**
+ * Broader admin guard for routes a CALLCENTER dispatcher should
+ * reach (operator queue, check-ins, fleet read). ADMINs pass too.
+ * Non-admin / non-callcenter users → /dashboard. CALLCENTER always
+ * sees the strict filter regardless of the per-user `callcenterMode`
+ * flag, because the role itself is the strict signal.
+ */
+export async function requireCallcenterOrAdmin(): Promise<AdminGuardResult> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    redirect('/login?next=%2Fadmin');
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, role: true, callcenterMode: true },
+  });
+  if (!user) {
+    redirect('/login?next=%2Fadmin');
+  }
+  if (user.role !== 'ADMIN' && user.role !== 'CALLCENTER') {
     redirect('/dashboard');
   }
-  return { id: user.id, email: user.email };
+  const role: AdminRole = user.role === 'CALLCENTER' ? 'CALLCENTER' : 'ADMIN';
+  return {
+    id: user.id,
+    email: user.email,
+    role,
+    callcenterMode: role === 'CALLCENTER' ? true : user.callcenterMode,
+  };
 }
 
 export interface RegistrationRow {
@@ -78,6 +239,12 @@ export interface RegistrationRow {
   contact3Name: string;
   contact3Phone: string;
   contact3Relationship: string;
+  /** Acquisition-channel tag persisted by the marketing-source cookie
+   *  at checkout time (e.g. 'organic', 'fb-ad-q3', 'holiday-fathers-
+   *  day-2026', 'pemex-batch'). Null when no source was present in
+   *  the cookie. Juan 2026-06-25 — surfaced on /admin/registrations
+   *  as a filter dropdown and a column on the CSV export. */
+  signupSource: string | null;
   /** True when the buyer already has at least one UserDevice row — drives
    *  the "Asignar IMEI" cross-link on /admin/registrations. */
   hasPairedDevice: boolean;
@@ -88,6 +255,17 @@ export interface RegistrationFilters {
   /** ISO date strings, inclusive bounds on Subscription.createdAt. */
   fromIso?: string;
   toIso?: string;
+  /** Juan 2026-06-23 review item B.2 — when true, applies the strict
+   *  non-fixture filter so demo+ and demo@ rows fall away. Default
+   *  false keeps the Playwright suite happy (it asserts against the
+   *  seeded demo+esencial-N rows). Juan flips it via the `?vista=real`
+   *  query param and the toggle on the page header. */
+  strict?: boolean;
+  /** Juan 2026-06-25 — CRM segment filter. Matches User.signupSource
+   *  exactly (the same value the marketing-source cookie writes at
+   *  checkout time). The reserved string `'(none)'` matches rows whose
+   *  signupSource is null. */
+  source?: string;
 }
 
 export async function fetchRegistrations(
@@ -101,7 +279,21 @@ export async function fetchRegistrations(
   page: number;
   pageSize: number;
 }> {
-  const { planType, fromIso, toIso } = filters;
+  const { planType, fromIso, toIso, strict = false, source } = filters;
+  // Source filter: '(none)' targets users with a null signupSource;
+  // any other value matches the exact tag the marketing-source cookie
+  // wrote at checkout time. Combined with the strict / non-fixture
+  // filter through Prisma's nested-AND so neither side blocks the
+  // other.
+  const userWhere = strict
+    ? STRICT_NON_FIXTURE_USER_FILTER
+    : NON_FIXTURE_USER_FILTER;
+  const sourceWhere =
+    source === undefined
+      ? null
+      : source === '(none)'
+        ? ({ signupSource: null } as Prisma.UserWhereInput)
+        : ({ signupSource: source } as Prisma.UserWhereInput);
   const where: Prisma.SubscriptionWhereInput = {
     ...(fromIso || toIso
       ? {
@@ -112,13 +304,9 @@ export async function fetchRegistrations(
         }
       : {}),
     ...(planType ? { plan: { type: planType } } : {}),
-    // Hide every fixture / synthetic row from Juan's admin view: spec
-    // accounts (@nucleus-test.local, @e2e-pair.local), industrial-
-    // fleet synthetic workers (@managed.sensu.internal + kind=
-    // MANAGED_WORKER), and the seeded demo fixture (demo@sensu.com.mx
-    // and demo+esencial-N@sensu.com.mx). See lib/admin-exclusions.ts
-    // for the full filter shape.
-    user: { is: NON_FIXTURE_USER_FILTER },
+    user: {
+      is: sourceWhere ? { AND: [userWhere, sourceWhere] } : userWhere,
+    },
   };
   const totalRows = await prisma.subscription.count({ where });
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -147,6 +335,7 @@ export async function fetchRegistrations(
           checkInDay: true,
           checkInTimeOfDay: true,
           questionnaireCompleted: true,
+          signupSource: true,
           emergencyContacts: {
             orderBy: { priority: 'asc' },
             select: { fullName: true, phone: true, relationship: true },
@@ -207,6 +396,7 @@ export async function fetchRegistrations(
         contact3Name: c3?.fullName ?? '',
         contact3Phone: c3?.phone ?? '',
         contact3Relationship: c3?.relationship ?? '',
+        signupSource: s.user.signupSource ?? null,
         hasPairedDevice: (s.user._count?.devices ?? 0) > 0,
       };
     }),
@@ -257,6 +447,9 @@ const CSV_COLUMNS: Array<keyof RegistrationRow> = [
   'contact3Name',
   'contact3Phone',
   'contact3Relationship',
+  // CRM source tag (Juan 2026-06-25). Lets accounting + marketing
+  // segment customers by acquisition channel without opening the DB.
+  'signupSource',
 ];
 
 /**

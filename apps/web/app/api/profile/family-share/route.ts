@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { prisma } from '@/lib/db';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import {
   ensureFamilyShare,
   isMasterUser,
@@ -8,29 +9,54 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-async function requireMasterUserId(): Promise<string | null> {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) return null;
-  if (!(await isMasterUser(userId))) return null;
-  return userId;
+type GateResult =
+  | { ok: true; userId: string }
+  | { ok: false; status: 401 | 403; body: { error: string } };
+
+async function requireMasterUserId(): Promise<GateResult> {
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return gate;
+  if (!(await isMasterUser(gate.userId))) {
+    return { ok: false, status: 403, body: { error: 'not_master' } };
+  }
+  return gate;
 }
 
 export async function GET(): Promise<NextResponse> {
-  const userId = await requireMasterUserId();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireMasterUserId();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const { userId } = gate;
   const share = await ensureFamilyShare(userId);
-  return NextResponse.json(share);
+  // Juan 2026-06-26: include the Master's first paired device IMEI so
+  // the /profile QR can encode a pre-filled /signup/familiar link.
+  // Watcher signup needs (imei, clientId, shareCode); without the IMEI
+  // here the QR would still force the relative to type it in.
+  const primary = await prisma.userDevice.findFirst({
+    where: { userId, role: 'MASTER' },
+    orderBy: { isPrimary: 'desc' },
+    select: { eviewDeviceId: true },
+  });
+  return NextResponse.json({
+    ...share,
+    deviceId: primary?.eviewDeviceId ?? null,
+  });
 }
 
 export async function POST(): Promise<NextResponse> {
   // POST rotates the share password while keeping the Client ID stable.
-  const userId = await requireMasterUserId();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireMasterUserId();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const { userId } = gate;
   const share = await rotateShareCode(userId);
-  return NextResponse.json(share);
+  // Same shape as GET so the client can refresh the QR without a
+  // second roundtrip.
+  const primary = await prisma.userDevice.findFirst({
+    where: { userId, role: 'MASTER' },
+    orderBy: { isPrimary: 'desc' },
+    select: { eviewDeviceId: true },
+  });
+  return NextResponse.json({
+    ...share,
+    deviceId: primary?.eviewDeviceId ?? null,
+  });
 }

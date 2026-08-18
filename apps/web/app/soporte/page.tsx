@@ -10,7 +10,7 @@ import { SoporteClient } from './soporte-client';
 export const dynamic = 'force-dynamic';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/image/upload/c_fill,g_auto,w_1200,h_630,q_auto,f_jpg/v1780582692/sensu/landing/angela-device.png';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Ayuda — Sensu',

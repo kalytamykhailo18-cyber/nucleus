@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { requireAdmin } from '@/lib/admin';
 import { logAdminAction } from '@/lib/admin-audit';
 import { sendDeviceActivatedEmail } from '@/lib/emails/device-activated';
+import { strictImeiSchema } from '@/lib/imei-validation';
 
 /**
  * Call-center action: pair an Eview pendant (eviewDeviceId / IMEI) to
@@ -18,7 +19,7 @@ import { sendDeviceActivatedEmail } from '@/lib/emails/device-activated';
 export const dynamic = 'force-dynamic';
 
 const schema = z.object({
-  eviewDeviceId: z.string().trim().min(8).max(64).regex(/^[A-Za-z0-9-]+$/),
+  eviewDeviceId: strictImeiSchema,
   // Optional pendant phone number captured by the call-center at
   // activation time. Surfaces on the operator caller-ID modal as a
   // click-to-call tel: link (Juan 2026-05-25).
@@ -56,7 +57,13 @@ export async function POST(
 
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    select: { id: true, userId: true, status: true, activatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      status: true,
+      activatedAt: true,
+      activatedDeviceId: true,
+    },
   });
   if (!sub) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
@@ -67,11 +74,40 @@ export async function POST(
       { status: 409 },
     );
   }
+  // Re-activation is allowed when a prior activation stamped a device
+  // that has since been unpaired from the user (no live UserDevice row
+  // for it). Before 2026-07-14 this endpoint refused any subscription
+  // with activatedAt set, which trapped admins into DB surgery when a
+  // first pairing was wrong (Barbara Cuellar hit exactly this: a
+  // 16-digit IMEI typo activated her sub, and the standard flow could
+  // not re-activate to the correct 15-digit IMEI). The new rule: if
+  // the previously activated device is still MASTER-paired to this
+  // user, the sub is genuinely "already activated" (409). If it is
+  // not, admin is recovering from a stale/mistaken activation and the
+  // flow proceeds — activatedAt/activatedDeviceId get overwritten
+  // below on success.
   if (sub.activatedAt) {
-    return NextResponse.json(
-      { error: 'already_activated', message: 'Device already paired for this subscription.' },
-      { status: 409 },
-    );
+    const prevPairing = sub.activatedDeviceId
+      ? await prisma.userDevice.findFirst({
+          where: {
+            userId: sub.userId,
+            eviewDeviceId: sub.activatedDeviceId,
+            role: 'MASTER',
+          },
+          select: { id: true },
+        })
+      : null;
+    if (prevPairing) {
+      return NextResponse.json(
+        {
+          error: 'already_activated',
+          message: 'Device already paired for this subscription.',
+        },
+        { status: 409 },
+      );
+    }
+    // Otherwise fall through: previously activated device is unpaired,
+    // admin is recovering the state through the standard UI.
   }
 
   // Collision check: IMEI already on another user as MASTER?

@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   LuCopy,
   LuEye,
   LuLink,
   LuMail,
+  LuQrCode,
   LuRefreshCcw,
   LuShield,
   LuTrash2,
@@ -49,12 +51,19 @@ function formatDateShort(iso: string): string {
  * rotate the password (Client ID stays stable).
  */
 export function FamilyShareCard(): React.ReactElement {
-  const [share, setShare] = useState<{ clientId: string; shareCode: string } | null>(
-    null,
-  );
+  const [share, setShare] = useState<{
+    clientId: string;
+    shareCode: string;
+    deviceId: string | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
   const [copied, setCopied] = useState<'id' | 'code' | null>(null);
+  // Juan 2026-06-26 — QR code display for relatives who scan instead
+  // of typing the 6-digit Client ID + 8-char password manually.
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrLink, setQrLink] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +71,11 @@ export function FamilyShareCard(): React.ReactElement {
       try {
         const res = await fetch('/api/profile/family-share', { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as { clientId: string; shareCode: string };
+        const body = (await res.json()) as {
+          clientId: string;
+          shareCode: string;
+          deviceId: string | null;
+        };
         if (!cancelled) setShare(body);
       } catch (err) {
         if (!cancelled) {
@@ -81,6 +94,43 @@ export function FamilyShareCard(): React.ReactElement {
     return () => clearTimeout(t);
   }, [copied]);
 
+  // (Re)generate the QR data URL whenever the share trio changes. The
+  // QR encodes a deep link into /signup/familiar with the IMEI +
+  // Client ID + share password pre-filled so a relative can scan with
+  // their phone camera and only enter their own name / email /
+  // password. If the master has no paired device yet, deviceId is
+  // null and we skip the QR — there's nothing meaningful to encode.
+  useEffect(() => {
+    if (!share || !share.deviceId) {
+      setQrDataUrl(null);
+      setQrLink(null);
+      return;
+    }
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : '';
+    const url = `${origin}/signup/familiar?imei=${encodeURIComponent(
+      share.deviceId,
+    )}&clientId=${encodeURIComponent(
+      share.clientId,
+    )}&shareCode=${encodeURIComponent(share.shareCode)}`;
+    setQrLink(url);
+    let cancelled = false;
+    QRCode.toDataURL(url, {
+      width: 280,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    })
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [share]);
+
   const copy = async (
     value: string,
     which: 'id' | 'code',
@@ -98,7 +148,11 @@ export function FamilyShareCard(): React.ReactElement {
     try {
       const res = await fetch('/api/profile/family-share', { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { clientId: string; shareCode: string };
+      const body = (await res.json()) as {
+        clientId: string;
+        shareCode: string;
+        deviceId: string | null;
+      };
       setShare(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al rotar');
@@ -162,7 +216,23 @@ export function FamilyShareCard(): React.ReactElement {
       ) : null}
 
       {share ? (
-        <div className="mt-5 flex items-center justify-end">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {/* QR toggle (Juan 2026-06-26). Only renders when there is
+              an IMEI to encode — without a paired device the relative
+              still cannot complete the form even with a scan, so the
+              button stays hidden until a Master pairs at least one. */}
+          {share.deviceId && qrDataUrl ? (
+            <button
+              type="button"
+              data-testid="family-share-qr-toggle"
+              onClick={() => setQrOpen((v) => !v)}
+              aria-expanded={qrOpen}
+              className="inline-flex items-center gap-1.5 rounded-full bg-sensu-50 px-3 py-1.5 text-xs font-medium tracking-tight text-sensu-700 ring-1 ring-sensu-200 transition-colors hover:bg-sensu-100 cursor-pointer"
+            >
+              <LuQrCode aria-hidden className="h-3.5 w-3.5" />
+              {qrOpen ? 'Ocultar QR' : 'Mostrar QR'}
+            </button>
+          ) : null}
           <button
             type="button"
             data-testid="family-share-rotate"
@@ -176,6 +246,40 @@ export function FamilyShareCard(): React.ReactElement {
             />
             {rotating ? 'Generando…' : 'Cambiar contraseña'}
           </button>
+        </div>
+      ) : null}
+
+      {/* QR display panel — collapsed by default so the rest of the
+          card breathes. Scan with a phone camera → opens
+          /signup/familiar with IMEI / Client ID / share password
+          already filled, relative only enters name + email + password. */}
+      {share && qrOpen && qrDataUrl ? (
+        <div
+          data-testid="family-share-qr-panel"
+          className="mt-4 flex flex-col items-center gap-3 rounded-2xl bg-zinc-50 p-5 ring-1 ring-inset ring-zinc-200"
+        >
+          <img
+            src={qrDataUrl}
+            alt="Código QR para que tu familiar se una"
+            width={280}
+            height={280}
+            className="rounded-xl bg-white p-2"
+          />
+          <p className="max-w-xs text-center text-xs leading-relaxed text-zinc-600">
+            Pídele a tu familiar que abra la cámara de su teléfono y apunte al
+            código. Solo tendrá que poner su nombre, correo y una contraseña.
+          </p>
+          {qrLink ? (
+            <button
+              type="button"
+              data-testid="family-share-qr-copy"
+              onClick={() => void copy(qrLink, 'code')}
+              className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-medium tracking-tight text-zinc-700 ring-1 ring-zinc-200 transition-colors hover:bg-zinc-100 cursor-pointer"
+            >
+              <LuCopy aria-hidden className="h-3.5 w-3.5" />
+              Copiar enlace para compartir
+            </button>
+          ) : null}
         </div>
       ) : null}
 

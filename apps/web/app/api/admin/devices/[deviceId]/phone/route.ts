@@ -40,7 +40,12 @@ export async function PATCH(
     where: { id: userId },
     select: { role: true },
   });
-  if (!user || user.role !== 'ADMIN') {
+  // ADMIN + CALLCENTER both allowed (Juan 2026-06-23 — C.1 review
+  // item). Dispatchers are the ones who actually stamp the pendant
+  // SIM number during the activation call, so blocking CALLCENTER
+  // here meant the operators saw a permission error in the inline
+  // edit modal exactly when they needed to type the number.
+  if (!user || (user.role !== 'ADMIN' && user.role !== 'CALLCENTER')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

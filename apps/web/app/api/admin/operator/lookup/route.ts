@@ -25,7 +25,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     where: { id: userId },
     select: { role: true },
   });
-  if (!user || user.role !== 'ADMIN') {
+  if (!user || (user.role !== 'ADMIN' && user.role !== 'CALLCENTER')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   const deviceId = request.nextUrl.searchParams.get('deviceId');

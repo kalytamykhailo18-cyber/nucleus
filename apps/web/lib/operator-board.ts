@@ -1,5 +1,7 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { ALERT_EVENT_TYPES, type AlertEventType } from '@/lib/alerts';
+import { devicePrefixesFor } from '@/lib/admin-exclusions';
 
 /**
  * Operator board — Phase 2 v0 (Juan business_requirements.md §7.4).
@@ -52,9 +54,21 @@ export interface PaginatedOperatorBoard {
   pageSize: number;
 }
 
+/**
+ * Event types that count as "real emergency" for the call-center
+ * queue. battery_low / geofence_*/ /* / button_press are useful to
+ * the family-side feed but would flood the dispatcher view, so a
+ * call-center viewer only sees these two.
+ */
+const CALLCENTER_EMERGENCY_EVENT_TYPES: AlertEventType[] = [
+  'sos',
+  'fall_detection',
+];
+
 export async function fetchOperatorBoard(
   page = 1,
   pageSize = 50,
+  options: { callcenterMode?: boolean } = {},
 ): Promise<PaginatedOperatorBoard> {
   // Exclude test artifacts that fire real EviewEvent rows but never
   // have a UserDevice/Device row to resolve in the caller-ID lookup —
@@ -62,19 +76,30 @@ export async function fetchOperatorBoard(
   // 100% noise for the call-center. STEP6UI-* comes from step-06
   // worker E2E specs; E2E-* is the generic prefix used by other dev
   // hooks.
-  // STEP6 / E2E- prefix exclusion only — the demo fixture pendants
-  // (EV-DEMO-, EV-GEOCRUD-, EV-NOGPS-) stay visible in the operator
-  // board so spec coverage of the caller-ID modal / Aura panel /
-  // resolve flow runs against real seeded events. Juan's /admin/fleet
-  // map filters them out separately because that surface is the
+  //
+  // STEP6 / E2E- exclusion runs for every viewer. The seeded demo
+  // pendants (EV-DEMO-, EV-GEOCRUD-, EV-NOGPS-) are hidden only when
+  // the viewer is a dispatcher (`callcenterMode=true`) so that
+  // Playwright + Juan's `demo@sensu.com.mx` admin keep seeing them
+  // for spec coverage and hands-on demos. Juan's /admin/fleet map
+  // filters demos separately because that surface is the
   // device-inventory lens, not the operator workflow lens.
-  const where = {
-    eventType: { in: ALERT_EVENT_TYPES as unknown as string[] },
-    AND: [
-      { eviewDeviceId: { not: { startsWith: 'STEP6UI-' } } },
-      { eviewDeviceId: { not: { startsWith: 'E2E-' } } },
-    ],
-  };
+  const eventTypes = options.callcenterMode
+    ? CALLCENTER_EMERGENCY_EVENT_TYPES
+    : (ALERT_EVENT_TYPES as unknown as AlertEventType[]);
+  // Shared exclusion list so /admin/operator, /admin/fleet, and
+  // /admin/reporting all agree on what counts as a synthetic device
+  // ID. Lenient mode strips only STEP6 / E2E- / e2e- noise; strict
+  // (callcenterMode=true) strips the full EV-* synthetic family.
+  const excludedDevicePrefixes = devicePrefixesFor(
+    options.callcenterMode ?? false,
+  );
+  const devicePrefixSql = Prisma.sql`AND ${Prisma.join(
+    excludedDevicePrefixes.map(
+      (p) => Prisma.sql`e."eviewDeviceId" NOT LIKE ${p + '%'}`,
+    ),
+    ' AND ',
+  )}`;
 
   // Server-side dedup: a single physical SOS press can produce two
   // EviewEvent rows because the TS worker (Nucleus) and the legacy
@@ -111,9 +136,21 @@ export async function fetchOperatorBoard(
       d."deviceName"
     FROM "EviewEvent" e
     LEFT JOIN "Device" d ON d."deviceId" = e."eviewDeviceId"
-    WHERE e."eventType" = ANY (${ALERT_EVENT_TYPES as unknown as string[]})
-      AND e."eviewDeviceId" NOT LIKE 'STEP6UI-%'
-      AND e."eviewDeviceId" NOT LIKE 'E2E-%'
+    WHERE e."eventType" = ANY (${eventTypes as unknown as string[]})
+      ${devicePrefixSql}
+      -- Suppress "Sin titular asignado" rows (Juan 2026-06-19): events
+      -- on devices with no MASTER UserDevice cannot be acted on — the
+      -- dispatcher has nobody to call. They land in the raw EviewEvent
+      -- stream from devices powered on but not paired to a customer
+      -- (post-shipping, pre-activation, or legacy/test inventory) and
+      -- they were drowning the real-customer queue. /admin/fleet still
+      -- surfaces the device for inventory diagnostics; this view is
+      -- the dispatcher workflow.
+      AND EXISTS (
+        SELECT 1 FROM "UserDevice" ud
+        WHERE ud."eviewDeviceId" = e."eviewDeviceId"
+          AND ud.role = 'MASTER'
+      )
     ORDER BY e."eviewDeviceId", e."eventType", e."timestamp", e."createdAt" ASC
   `;
 

@@ -168,18 +168,13 @@ export function PushToggle() {
   }
 
   if (state.kind === 'denied') {
-    return (
-      <div
-        data-testid="push-denied"
-        className="card-surface flex items-start gap-3 rounded-2xl px-4 py-3 text-sm"
-      >
-        <LuCircleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-        <p className="text-zinc-700">
-          Bloqueaste las notificaciones en este navegador. Habilítalas desde
-          la barra de URL para volver a recibir avisos en tiempo real.
-        </p>
-      </div>
-    );
+    // 2026-08-10 audit: PushPromptBanner already surfaces the denied
+    // state as a compact pill at the top of /dashboard, and rendering
+    // this longer inline block inside the alerts-feed header stacked
+    // a second amber message on the same page. Cannot recover via
+    // JS anyway, so we hide the toggle entirely in denied state and
+    // let the top pill be the sole signal.
+    return null;
   }
 
   const isOn = state.kind === 'granted-on';

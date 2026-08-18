@@ -1,17 +1,12 @@
-import { redirect } from 'next/navigation';
 import { LuMapPin } from 'react-icons/lu';
-import { auth } from '@/auth';
+import { requireFamilySession } from '@/lib/admin';
 import { GeofenceEditor } from '@/components/geofence-editor';
 import { SectionLabel } from '@/components/section-label';
 import { fetchUserDevices } from '@/lib/devices';
 import { fetchUserGeofences } from '@/lib/geofences';
 
 export default async function GeofencesPage() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    redirect('/login?next=%2Fgeofences');
-  }
+  const { id: userId } = await requireFamilySession('/geofences');
 
   const [devices, geofences] = await Promise.all([
     fetchUserDevices(userId),

@@ -26,11 +26,14 @@ import {
 } from 'react-icons/lu';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
+import { env } from '@/lib/env';
+import { SlimLanding } from './slim-landing';
 import { FaqAccordion } from '@/components/faq-accordion';
 import { LandingVideo } from '@/components/landing-video';
 import { MediaLightbox } from '@/components/media-lightbox';
 import { TestimonialCarousel } from '@/components/testimonial-carousel';
 import { CardEditPencil } from '@/components/card-edit-pencil';
+import { HolidayBanner } from '@/components/holiday-banner';
 import { HeroPhone } from '@/components/hero-phone';
 import { fetchActivePlans, formatPriceMXN } from '@/lib/plans';
 import { fetchLandingOverrides, pickImage, pickText, pickVideo } from '@/lib/landing';
@@ -78,6 +81,19 @@ export default async function HomePage() {
     if (!isAdmin) {
       redirect('/dashboard');
     }
+  }
+
+  // Slim-landing mode (Juan 2026-07-02): show the 3-card gateway on
+  // `/` regardless of whether the marketing-site 301 redirects have
+  // been enabled. This lets Juan shrink the Nucleus front door BEFORE
+  // Lovable's custom-domain claim on sensu.com.mx is finished. The
+  // NUCLEUS_SLIM_LANDING getter also returns true when the full
+  // marketing-offload flag is on, so the flag flip on cutover day
+  // automatically keeps the slim landing in place.
+  // Admins continue to see the full inline-CMS render so they can
+  // still edit the legacy landing surface if anything gets reverted.
+  if (env.NUCLEUS_SLIM_LANDING && !isAdmin) {
+    return <SlimLanding />;
   }
 
   const [plans, landingOverrides] = await Promise.all([
@@ -153,10 +169,15 @@ export default async function HomePage() {
       data-testid="nucleus-home"
       className="flex flex-1 flex-col items-center px-6"
     >
+      <HolidayBanner />
       {/* HERO ---------------------------------------------------------- */}
       {(() => {
         const heroPhoneVideo = vid('hero-phone-video', {
-          url: 'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582705/sensu/landing/para-mi-promo.mov',
+          // 2026-06-26: Cloudinary cloud `dcfjvxt5h` was disabled
+          // upstream (401 for every asset). Default cleared so the
+          // hero phone frame renders empty until a real promo video
+          // is rehosted.
+          url: '',
         });
         const heroPhonePoster = heroPhoneVideo.url
           .replace(
@@ -233,6 +254,17 @@ export default async function HomePage() {
                   </Link>
                   {' '}con el ID que te compartió.
                 </p>
+                <p className="mt-3 text-sm text-zinc-600 animate-fade-up [animation-delay:340ms]">
+                  <Link
+                    href="/instalar"
+                    data-testid="home-cta-install"
+                    className="inline-flex items-center gap-1.5 font-medium text-sensu-600 transition-colors hover:text-sensu-500 underline-offset-4 hover:underline"
+                  >
+                    <LuSmartphone aria-hidden className="h-4 w-4" />
+                    Instala Sensu en tu teléfono
+                  </Link>
+                  {' '}— funciona en iPhone y Android sin App Store.
+                </p>
               </div>
               <div className="flex items-center justify-center">
                 <HeroPhone
@@ -245,43 +277,72 @@ export default async function HomePage() {
         );
       })()}
 
-      {/* INTRO VIDEO — Juan's landing-redesign doc 2026-06-03 asked for a
-          prominent video slot below the hero, mirroring the YouTube
-          embed that lived on the prior Lovable site (image2.png of the
-          doc). Defaults to the Sensu Angela reel; controls are visible
-          so the visitor can pause / re-watch. Admin swaps via the
-          inline CMS using any YouTube / Vimeo / Cloudinary URL. */}
+      {/* INTRO VIDEOS — Juan 2026-06-16 asked for two side-by-side video
+          boxes below the hero, both demoing how the device works.
+          Each slot has its own CMS slug so admins swap them
+          independently from the inline pencil. The first slug stays
+          `intro-video` to preserve the URL Juan already set there;
+          the second is `intro-video-2`. Stacks vertically on mobile,
+          renders 2-up on md+. */}
       <section
         data-testid="home-intro-video"
         className="w-full max-w-5xl py-10"
       >
         {(() => {
-          const introVideo = vid('intro-video', {
+          const introVideo1 = vid('intro-video', {
+            url: 'https://www.youtube.com/watch?v=AV6qTP3RiLc',
+          });
+          const introVideo2 = vid('intro-video-2', {
             url: 'https://www.youtube.com/watch?v=AV6qTP3RiLc',
           });
           return (
-            <div className="relative">
-              {isAdmin && (
-                <CardEditPencil
-                  slugBase="intro-video"
-                  modalTitle="Editar video de introducción"
-                  fields={[
-                    {
-                      key: 'video',
-                      label: 'URL del video (YouTube / Vimeo / Cloudinary / MP4)',
-                      type: 'video',
-                      initial: introVideo.url,
-                      slug: 'intro-video',
-                    },
-                  ]}
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+              <div className="relative">
+                {isAdmin && (
+                  <CardEditPencil
+                    slugBase="intro-video"
+                    modalTitle="Editar video 1"
+                    fields={[
+                      {
+                        key: 'video',
+                        label: 'URL del video (YouTube / Vimeo / Cloudinary / MP4)',
+                        type: 'video',
+                        initial: introVideo1.url,
+                        slug: 'intro-video',
+                      },
+                    ]}
+                  />
+                )}
+                <LandingVideo
+                  url={introVideo1.url}
+                  title="Conoce Sensu Angela"
+                  controls
+                  testId="home-intro-video-player"
                 />
-              )}
-              <LandingVideo
-                url={introVideo.url}
-                title="Conoce Sensu Angela"
-                controls
-                testId="home-intro-video-player"
-              />
+              </div>
+              <div className="relative">
+                {isAdmin && (
+                  <CardEditPencil
+                    slugBase="intro-video-2"
+                    modalTitle="Editar video 2"
+                    fields={[
+                      {
+                        key: 'video',
+                        label: 'URL del video (YouTube / Vimeo / Cloudinary / MP4)',
+                        type: 'video',
+                        initial: introVideo2.url,
+                        slug: 'intro-video-2',
+                      },
+                    ]}
+                  />
+                )}
+                <LandingVideo
+                  url={introVideo2.url}
+                  title="Cómo funciona Sensu"
+                  controls
+                  testId="home-intro-video-player-2"
+                />
+              </div>
             </div>
           );
         })()}
@@ -599,8 +660,7 @@ export default async function HomePage() {
               title: 'Dispositivo Angela',
               body:
                 'GPS + botón SOS + llamadas bidireccionales. Conexión celular propia, no necesita el teléfono cerca.',
-              defaultImage:
-                'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780521540/sensu/landing/angela-esencial-hero.png',
+              defaultImage: '',
             },
             {
               slug: 'what-is-card-2',
@@ -609,8 +669,7 @@ export default async function HomePage() {
               title: 'Call Center 24/7',
               body:
                 'Operadores humanos siempre disponibles, con el historial médico y los contactos de emergencia listos en pantalla.',
-              defaultImage:
-                'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574332/sensu/landing/app-screen-1.jpg',
+              defaultImage: '',
             },
             {
               slug: 'what-is-card-3',
@@ -619,8 +678,7 @@ export default async function HomePage() {
               title: 'Panel familiar',
               body:
                 'Ubicación en tiempo real, alertas y geo-cercas desde el celular o la computadora.',
-              defaultImage:
-                'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574333/sensu/landing/app-screen-2.jpg',
+              defaultImage: '',
             },
             {
               slug: 'what-is-card-4',
@@ -629,8 +687,7 @@ export default async function HomePage() {
               title: 'Detección de caídas',
               body:
                 'El sensor reconoce caídas y lanza la alerta automáticamente, sin que el usuario haga nada.',
-              defaultImage:
-                'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574333/sensu/landing/app-screen-3.jpg',
+              defaultImage: '',
             },
             {
               slug: 'what-is-card-5',
@@ -639,8 +696,7 @@ export default async function HomePage() {
               title: 'Asistencias integrales',
               body:
                 'Asistencia médica, psicológica, nutricional, vial y de hogar. Te ayudamos en cualquier situación.',
-              defaultImage:
-                'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574334/sensu/landing/app-screen-4.jpg',
+              defaultImage: '',
             },
           ].map((card, i) => {
             const Icon = card.icon;
@@ -1192,6 +1248,11 @@ export default async function HomePage() {
                   <LuCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                   <span><span className="font-medium">Coordinación de emergencias</span> — ambulancia y apoyo inmediato cuando se necesita.</span>
                 </li>
+                {/* Juan 2026-07-31: same drop as /planes — Asistencias
+                    integrales bullet retired from the Esencial pitch on
+                    the landing card because the ERA/Aura margin doesn't
+                    fit the $9,996 annual model. Existing Total customers
+                    keep their access; T&C wording untouched. */}
                 {plan.includesAura && (
                   <>
                     <li className="pt-3 mt-2 border-t border-zinc-100 text-xs uppercase tracking-[0.14em] text-violet-600">
@@ -1287,11 +1348,11 @@ export default async function HomePage() {
               </div>
               {(() => {
                 const sosDeviceImage = img('sos-device-image', {
-                  url: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780582692/sensu/landing/angela-device.png',
+                  url: '',
                   alt: 'Dispositivo Angela con botón SOS',
                 });
                 const sosAppImage = img('sos-app-image', {
-                  url: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574332/sensu/landing/app-screen-1.jpg',
+                  url: '',
                   alt: 'Panel familiar Sensu — botón SOS en la app',
                 });
                 return (

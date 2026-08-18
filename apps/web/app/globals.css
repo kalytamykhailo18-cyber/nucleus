@@ -21,6 +21,19 @@
   select:not(:disabled) {
     cursor: pointer;
   }
+
+  /* Belt to the JS broken-image-hider's suspenders: any <img> or
+   * <video> with no src (or an empty src) is hidden at the CSS layer
+   * so the broken-icon eyesore can never paint, even before the
+   * network request fires. Network failures still need the JS hider
+   * because the src attribute looks valid until the response comes
+   * back. */
+  img:not([src]),
+  img[src=""],
+  video:not([src]),
+  video[src=""] {
+    visibility: hidden;
+  }
 }
 
 @theme {

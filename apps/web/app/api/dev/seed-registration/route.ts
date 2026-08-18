@@ -7,6 +7,7 @@ import { env } from '@/lib/env';
 import {
   fetchPlanByType,
   grossCentsForNet,
+  isFreeShippingActive,
   nextRenewalAt,
   SHIPPING_NET_CENTAVOS,
   type BillingCadence,
@@ -140,9 +141,16 @@ export async function POST(request: NextRequest) {
   const initialFeeGross = useCadenceTotals
     ? grossCentsForNet(plan.initialFeeCents!)
     : 0;
-  const shippingGross = useCadenceTotals
-    ? grossCentsForNet(SHIPPING_NET_CENTAVOS)
-    : 0;
+  // Mirror the production Envío gate so seeded totals match what
+  // /api/checkout/start actually charges Stripe.
+  const freeShippingActive = isFreeShippingActive(
+    Date.now(),
+    env.NUCLEUS_FREE_SHIPPING_UNTIL_ISO,
+  );
+  const shippingGross =
+    useCadenceTotals && !freeShippingActive
+      ? grossCentsForNet(SHIPPING_NET_CENTAVOS)
+      : 0;
   const recurringGross = useCadenceTotals
     ? grossCentsForNet(cadenceNetForPlan!)
     : grossCentsForNet(plan.monthlyPriceCents);

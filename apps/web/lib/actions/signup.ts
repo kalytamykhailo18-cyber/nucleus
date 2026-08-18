@@ -11,6 +11,10 @@ import {
   sanitizeSource,
 } from '@/lib/signup-source';
 import { syncContact } from '@/lib/hubspot';
+import {
+  findReferrerByCode,
+  recordReferralAttribution,
+} from '@/lib/referrals';
 
 export interface SignupFormState {
   ok: boolean;
@@ -60,8 +64,15 @@ export async function signupAction(
     promoCode: null,
   });
 
+  // Referral code (Phase A+ #1, 2026-06-16). Sticky cookie set by
+  // middleware when the visitor first lands via `?ref=CODE`; we
+  // attribute the new User to the referrer iff the code resolves
+  // and isn't the new user's own (self-referrals make no sense).
+  const referralCookie = cookieStore.get('nucleus_referral_code')?.value ?? null;
+
+  let createdUserId: string | null = null;
   try {
-    await prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         email,
         passwordHash: hashPassword(parsed.data.password),
@@ -70,10 +81,23 @@ export async function signupAction(
         questionnaireCompleted: false,
         signupSource,
       },
+      select: { id: true },
     });
+    createdUserId = created.id;
   } catch (err) {
     console.error('signupAction create failed', err);
     return { ok: false, error: 'No se pudo crear la cuenta. Inténtalo de nuevo.' };
+  }
+
+  if (referralCookie && createdUserId) {
+    const referrer = await findReferrerByCode(referralCookie, createdUserId);
+    if (referrer) {
+      void recordReferralAttribution({
+        referrerUserId: referrer.id,
+        referredUserId: createdUserId,
+        code: referralCookie,
+      });
+    }
   }
 
   void syncContact({

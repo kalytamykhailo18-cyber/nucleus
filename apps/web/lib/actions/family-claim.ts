@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { hashPassword } from '@/lib/password';
 import { normalizeEmail } from '@/lib/email';
 import { sendNewMemberJoinedEmail } from '@/lib/emails/new-member-joined';
+import { strictImeiSchema } from '@/lib/imei-validation';
 
 /**
  * Flat IMEI-only signup — Juan 2026-05-07 doc.
@@ -46,12 +47,7 @@ const claimSchema = z.object({
     .max(255)
     .optional()
     .nullable(),
-  imei: z
-    .string()
-    .trim()
-    .min(8, 'IMEI debe tener al menos 8 caracteres')
-    .max(64)
-    .regex(/^[A-Za-z0-9-]+$/, 'IMEI sólo admite letras, números y guiones'),
+  imei: strictImeiSchema,
 });
 
 export async function familyClaimAction(

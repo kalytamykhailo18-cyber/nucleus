@@ -366,34 +366,9 @@ export default function ProfileForm() {
                 </select>
               </label>
             </div>
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="text-zinc-600">CURP</span>
-              <input
-                type="text"
-                value={draft.curp ?? ''}
-                onChange={(e) =>
-                  handleChange('curp', (e.target.value.toUpperCase() || null) as string | null)
-                }
-                placeholder="AAAA000000HAAAAA00"
-                maxLength={18}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={
-                  draft.curp != null &&
-                  draft.curp.length === 18 &&
-                  !CURP_REGEX.test(draft.curp)
-                    ? true
-                    : undefined
-                }
-                data-testid="profile-curp"
-                className={`${fieldBase} font-mono`}
-              />
-              {draft.curp != null &&
-                draft.curp.length === 18 &&
-                !CURP_REGEX.test(draft.curp) && (
-                  <span className="text-xs text-rose-600">Formato inválido.</span>
-                )}
-            </label>
+            {/* CURP field removed 2026-06-24 (Juan: Cruz Roja won't ask
+                for it). State + validator above stay so older affiliate
+                paths still compile; the profile UI no longer prompts. */}
             <label className="flex flex-col gap-2 text-sm">
               <span className="text-zinc-600">Teléfono del usuario de la Angela</span>
               <input

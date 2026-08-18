@@ -2,7 +2,6 @@ import {
   LuBellRing,
   LuMapPin,
   LuShieldCheck,
-  LuSparkles,
   LuTriangleAlert,
 } from 'react-icons/lu';
 import { redirect } from 'next/navigation';
@@ -17,6 +16,9 @@ import { AlertsFeed } from '@/components/alerts-feed';
 import { PushToggle } from '@/components/push-toggle';
 import { WelcomePendingDevice } from '@/components/welcome-pending-device';
 import { EmergencyContactCard } from '@/components/emergency-contact-card';
+import { PushPromptBanner } from '@/components/push-prompt-banner';
+import { NotificationPermissionGuard } from '@/components/notification-permission-guard';
+import { InstallChip } from '@/components/install-chip';
 import { SubscriptionCard } from '@/components/subscription-card';
 import { fetchUserDevices } from '@/lib/devices';
 import { fetchAlertsForUser } from '@/lib/alerts';
@@ -25,7 +27,14 @@ import type { BillingCadence } from '@/lib/plans';
 export default async function DashboardPage() {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
-  const sessionRole = (session?.user as { role?: 'USER' | 'ADMIN' } | undefined)?.role;
+  const sessionRole = (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' } | undefined)?.role;
+
+  // Call-center dispatchers belong on /admin/operator, not the family
+  // dashboard. Bounce them first so the page below never tries to
+  // resolve a customer subscription for a non-customer account.
+  if (sessionRole === 'CALLCENTER') {
+    redirect('/admin/operator');
+  }
 
   // Company-admin redirect — a user whose only foothold is being the
   // ADMIN of a Company (HR/Safety lead on a managed fleet) belongs on
@@ -45,8 +54,9 @@ export default async function DashboardPage() {
   //   - ACTIVE + !questionnaireCompleted → /onboarding/questionnaire
   //   - ACTIVE + questionnaireCompleted → land here on the dashboard
   //   - no subscription (bare /signup user) → land here on the dashboard
-  let latestSubStatus: 'PENDING_PAYMENT' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED' | null = null;
+  let latestSubStatus: 'PENDING_PAYMENT' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED' | 'PAUSED' | null = null;
   let dbFullName: string | null = null;
+  let referralCreditCentavos = 0;
   let activeSub: {
     cadence: BillingCadence | null;
     startDate: Date | null;
@@ -59,6 +69,7 @@ export default async function DashboardPage() {
       select: {
         fullName: true,
         questionnaireCompleted: true,
+        referralCreditCentavos: true,
         subscriptions: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -74,6 +85,7 @@ export default async function DashboardPage() {
       },
     });
     dbFullName = me?.fullName ?? null;
+    referralCreditCentavos = me?.referralCreditCentavos ?? 0;
     const latestSub = me?.subscriptions[0];
     latestSubStatus = latestSub?.status ?? null;
     if (latestSub?.status === 'PENDING_PAYMENT') {
@@ -120,7 +132,7 @@ export default async function DashboardPage() {
   return (
     <main
       data-testid="dashboard-page"
-      className="flex flex-1 flex-col items-center px-6 pt-12 pb-12"
+      className="flex flex-1 flex-col items-center overflow-x-hidden px-6 pt-12 pb-12"
     >
       <div className="w-full max-w-3xl">
         <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight text-zinc-900 animate-fade-up [animation-delay:80ms]">
@@ -137,6 +149,14 @@ export default async function DashboardPage() {
           .
         </p>
 
+        {/* Persistent install chip (Ustym 2026-08-10). Real users
+            never see the one-shot install bottom-sheet a second time;
+            this chip stays visible until they run in standalone mode
+            so the install path is always one tap away. */}
+        <div className="mt-4 animate-fade-up [animation-delay:200ms]">
+          <InstallChip />
+        </div>
+
         {/* Post-purchase welcome — visible only while we still owe the
             family their first device. The call-center assigns one and
             this card disappears the next time the family loads the page. */}
@@ -144,26 +164,23 @@ export default async function DashboardPage() {
           <WelcomePendingDevice />
         )}
 
-        {/* Subscription details — plan name + cadence + next renewal
-            date. Only rendered when the active subscription has a
-            cadence; legacy single-monthly customers fall through to the
-            older "Servicio Sensu" tile lower on the page. */}
-        {activeSub?.cadence && (
-          <div className="mt-8">
-            <SubscriptionCard
-              planName={activeSub.planName}
-              cadence={activeSub.cadence}
-              startDate={activeSub.startDate}
-              currentPeriodEnd={activeSub.currentPeriodEnd}
-              animationDelay="180ms"
-            />
-          </div>
-        )}
-
         {/* SOS escalation reminder — shown whenever the family has at
             least one device so they always know how to reach the
             call-center directly during an emergency. */}
         {devices.length > 0 && <EmergencyContactCard />}
+
+        {/* Push-notifications opt-in nudge (Juan 2026-06-25). Sits
+            above the map so a brand-new family sees it the moment
+            they land on /dashboard; self-hides for users who already
+            subscribed, denied, or dismissed within the past 7 days. */}
+        {devices.length > 0 && <PushPromptBanner />}
+        {/* Sync-only guard: server permission sync + missed-push
+            escalation modal. PushPromptBanner owns the visible
+            denied-state pill so the guard skips its own banner via
+            variant='sync-only'. Family users on /dashboard used to
+            miss the escalation modal after /app/family was killed in
+            the 2026-08-10 audit; this restores that coverage. */}
+        <NotificationPermissionGuard variant="sync-only" />
 
         {devices.length > 0 && (
           <section
@@ -241,16 +258,26 @@ export default async function DashboardPage() {
           </div>
         </section>
 
-        <section className="mt-10 grid gap-4 sm:grid-cols-2">
-          <div className={`${cardBase} animate-rise [animation-delay:300ms]`}>
-            <SectionLabel icon={LuSparkles} tone="violet">Próximos pasos</SectionLabel>
-            <p className="mt-3 text-base text-zinc-700 leading-relaxed">
-              Mapa en vivo del dispositivo, historial de alertas, contactos
-              de emergencia y editor de geocercas — en construcción.
-            </p>
+        {/* Subscription details — plan name + cadence + next renewal
+            date. Juan 2026-06-23 (A.1) asked to move this to the bottom
+            so the dashboard greets the family with their devices,
+            alerts, and map first, and the billing reminder only
+            surfaces after they've scrolled through what matters. */}
+        {activeSub?.cadence && (
+          <div className="mt-10">
+            <SubscriptionCard
+              planName={activeSub.planName}
+              cadence={activeSub.cadence}
+              startDate={activeSub.startDate}
+              currentPeriodEnd={activeSub.currentPeriodEnd}
+              referralCreditCentavos={referralCreditCentavos}
+              animationDelay="180ms"
+            />
           </div>
+        )}
 
-          <div className={`${cardBase} animate-rise [animation-delay:360ms]`}>
+        <section className="mt-10">
+          <div className={`${cardBase} animate-rise [animation-delay:300ms]`}>
             <div className="flex items-center justify-between">
               <SectionLabel icon={LuShieldCheck} tone="emerald">Servicio Sensu</SectionLabel>
               <LivePulse label="24/7 activo" />

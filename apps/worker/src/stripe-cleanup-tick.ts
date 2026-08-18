@@ -13,7 +13,11 @@ import { env } from './env';
  * which is intentional in dev / staging) — we log once and move on.
  */
 
-const TICK_INTERVAL_MS = 60 * 60 * 1000;
+// Juan 2026-06-25: cadence dropped from hourly → every 15 min so the
+// Stripe Pagos view stays clean within a quarter-hour of any new
+// Incompleto row landing (mostly from my deploy-verification traffic).
+// Paired with route-side LOOKBACK_HOURS = 6 + CANCEL_CAP = 1000.
+const TICK_INTERVAL_MS = 15 * 60 * 1000;
 const BOOT_DELAY_MS = 2 * 60 * 1000;
 const TICK_URL = 'http://nucleus-web:3000/api/jobs/stripe-cleanup-tick';
 

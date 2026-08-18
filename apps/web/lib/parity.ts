@@ -1,6 +1,44 @@
 import { prisma } from '@/lib/db';
 
 /**
+ * Tiny TTL memo for aggregate queries that move slowly relative to
+ * page loads. /admin/parity is the only consumer; the summary +
+ * Phase-A metric there used to recompute on every request, scanning
+ * the 150k+ row WorkerParityCheck table each time. 5-minute TTL is
+ * fine: TS observations keep landing, but the headline percentages +
+ * counts shift by fractions of a percent within that window, and
+ * Python stopped writing weeks ago so its count is frozen.
+ */
+function memoTTL<T>(
+  ttlMs: number,
+  fn: () => Promise<T>,
+): (() => Promise<T>) & { bust: () => void } {
+  let cached: { at: number; value: T } | null = null;
+  let inflight: Promise<T> | null = null;
+  const wrapped = async (): Promise<T> => {
+    const now = Date.now();
+    if (cached && now - cached.at < ttlMs) return cached.value;
+    if (inflight) return inflight;
+    inflight = fn()
+      .then((v) => {
+        cached = { at: Date.now(), value: v };
+        return v;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+    return inflight;
+  };
+  wrapped.bust = (): void => {
+    cached = null;
+    inflight = null;
+  };
+  return wrapped;
+}
+
+const FIVE_MIN_MS = 5 * 60 * 1000;
+
+/**
  * Step 14 — parity comparator query helpers.
  *
  * Each MQTT event observed by either subscriber lands as a
@@ -37,7 +75,7 @@ export interface ParitySummary {
   newestObservation: string | null;
 }
 
-export async function fetchParitySummary(
+async function fetchParitySummaryUncached(
   windowFromIso?: string,
 ): Promise<ParitySummary> {
   const where = windowFromIso
@@ -72,6 +110,22 @@ export async function fetchParitySummary(
   };
 }
 
+const fetchParitySummaryCached = memoTTL(FIVE_MIN_MS, () =>
+  fetchParitySummaryUncached(),
+);
+
+/**
+ * 5-minute TTL on the all-time summary path. Callers that pass a
+ * custom `windowFromIso` bypass the cache (specs / debug curls) since
+ * different windows would collide on the same memo cell.
+ */
+export async function fetchParitySummary(
+  windowFromIso?: string,
+): Promise<ParitySummary> {
+  if (windowFromIso) return fetchParitySummaryUncached(windowFromIso);
+  return fetchParitySummaryCached();
+}
+
 export interface ParityRow {
   id: string;
   source: string;
@@ -95,6 +149,27 @@ export interface PaginatedParity {
   pageSize: number;
 }
 
+// 2026-06-30: fetchParityRecent ran 2 unconditional COUNT(*) against
+// WorkerParityCheck on every page render. With 228k rows and parallel
+// Playwright workers each hitting /admin/parity simultaneously, the
+// counts serialized on the DB pool and pushed page render past the
+// 30 s test timeout — the root cause of the three /admin/parity flake
+// cluster. Counts only change when a new worker observation lands
+// (rare in the demo DB), so caching for a minute eliminates the
+// serialized hot path without hiding real divergence — the actual
+// table rows below remain uncached so page=2 etc. still load fresh.
+const PARITY_COUNT_TTL_MS = 60 * 1000;
+const fetchParityCountsCached = memoTTL(
+  PARITY_COUNT_TTL_MS,
+  async (): Promise<{ tsCount: number; pyCount: number }> => {
+    const [tsCount, pyCount] = await Promise.all([
+      prisma.workerParityCheck.count({ where: { source: 'TS' } }),
+      prisma.workerParityCheck.count({ where: { source: 'PYTHON' } }),
+    ]);
+    return { tsCount, pyCount };
+  },
+);
+
 export async function fetchParityRecent(
   page = 1,
   pageSize = 20,
@@ -104,10 +179,7 @@ export async function fetchParityRecent(
   // page advances `half` rows in both streams, so page 1 = newest 10 TS
   // + newest 10 PY, page 2 = next 10 of each, etc.
   const half = Math.ceil(pageSize / 2);
-  const [tsCount, pyCount] = await Promise.all([
-    prisma.workerParityCheck.count({ where: { source: 'TS' } }),
-    prisma.workerParityCheck.count({ where: { source: 'PYTHON' } }),
-  ]);
+  const { tsCount, pyCount } = await fetchParityCountsCached();
   const totalRows = tsCount + pyCount;
   const totalPages = Math.max(1, Math.ceil(Math.max(tsCount, pyCount) / half));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -170,7 +242,7 @@ export interface PhaseAParityMetric {
   matchRatePct: number;
 }
 
-export async function fetchPhaseAParityMetric(): Promise<PhaseAParityMetric> {
+async function fetchPhaseAParityMetricUncached(): Promise<PhaseAParityMetric> {
   const start = new Date(PHASE_A_PARITY_WINDOW_START_ISO);
   const rows = await prisma.$queryRaw<
     { ts_total: bigint; matched: bigint }[]
@@ -218,6 +290,31 @@ export async function fetchPhaseAParityMetric(): Promise<PhaseAParityMetric> {
     unmatchedTs: Math.max(0, tsTotal - matched),
     matchRatePct: tsTotal === 0 ? 100 : Math.round((1000 * matched) / tsTotal) / 10,
   };
+}
+
+/**
+ * Phase-A metric is wrapped in the same 5-minute TTL as the summary.
+ * The CTE used to scan 150k+ rows on every /admin/parity load; with
+ * the new observedAt index plus this memo it's effectively a one-shot
+ * read.
+ */
+export const fetchPhaseAParityMetric = memoTTL(
+  FIVE_MIN_MS,
+  fetchPhaseAParityMetricUncached,
+);
+
+/**
+ * Hand-bust the parity aggregate cache. Call this from any route that
+ * writes a WorkerParityCheck row (e.g. `/api/dev/parity-mirror`) so
+ * that a fresh GET reflects the new row immediately, instead of being
+ * stuck at the cached numbers for up to 5 minutes. Production worker
+ * writes happen in a separate process and cannot reach this memo —
+ * those still wait out the TTL, which is fine since the percentages
+ * shift by fractions of a percent between web-process page loads.
+ */
+export function bustParityCache(): void {
+  fetchParitySummaryCached.bust();
+  fetchPhaseAParityMetric.bust();
 }
 
 export const __sevenDaysMs = SEVEN_DAYS_MS;

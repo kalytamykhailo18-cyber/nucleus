@@ -6,10 +6,12 @@ import { prisma } from '@/lib/db';
 import { fetchActivePlans, formatPriceMXN } from '@/lib/plans';
 import { fetchLandingOverrides, pickText } from '@/lib/landing';
 import { CardEditPencil } from '@/components/card-edit-pencil';
+import { HolidayBanner } from '@/components/holiday-banner';
 import { sensuContact } from '@/lib/contact-info';
+import { env } from '@/lib/env';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/image/upload/c_fill,g_auto,w_1200,h_630,q_auto,f_jpg/v1780521540/sensu/landing/angela-esencial-hero.png';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu Angela — Planes',
@@ -19,7 +21,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Sensu Angela — Planes',
     description:
-      'Plan Esencial $550 MXN/mes — dispositivo Angela, monitoreo 24/7, app familiar y respuesta humana en cualquier emergencia.',
+      'Sensu Angela desde $833 MXN al mes, dispositivo Angela, monitoreo 24/7, app familiar y respuesta humana en cualquier emergencia.',
     url: '/planes',
     images: [{ url: OG_IMAGE, width: 1200, height: 630, alt: 'Sensu Angela — Plan Esencial' }],
   },
@@ -64,6 +66,7 @@ export default async function PlanesPage(): Promise<React.ReactElement> {
 
   return (
     <main data-testid="planes-page" className="flex flex-1 flex-col">
+      <HolidayBanner />
       {/* HERO COPY — title + lead exactly mirror the landing-page plan
           section (`Elige la protección que necesitas.`). */}
       <section className="relative w-full px-6 pt-20 pb-8 sm:pt-24">
@@ -133,11 +136,9 @@ export default async function PlanesPage(): Promise<React.ReactElement> {
                 data-testid={`plan-${plan.type}-price`}
                 className="mt-5 text-3xl font-semibold tracking-tight text-zinc-900 tabular-nums"
               >
-                {formatPriceMXN(
-                  plan.priceMonthlyCents ?? plan.monthlyPriceCents,
-                )}
+                Desde $833 MXN
                 <span className="ml-2 align-middle text-xs font-medium tracking-normal text-zinc-500">
-                  + IVA
+                  al mes · IVA incluido
                 </span>
               </p>
               <p className="mt-3 text-sm leading-relaxed text-zinc-600">
@@ -168,6 +169,12 @@ export default async function PlanesPage(): Promise<React.ReactElement> {
                   <LuCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                   <span><span className="font-medium">Coordinación de emergencias</span> — ambulancia y apoyo inmediato cuando se necesita.</span>
                 </li>
+                {/* Juan 2026-07-31: dropped the "Asistencias integrales"
+                    bullet from the Esencial feature list because the
+                    ERA/Aura service margin does not fit the direct-sales
+                    $9,996 annual model. The bullet stays available in the
+                    Terms & Conditions for reference and continues to be
+                    provisioned for existing Total subscribers. */}
                 {plan.includesAura && (
                   <>
                     <li className="pt-3 mt-2 border-t border-zinc-100 text-xs uppercase tracking-[0.14em] text-violet-600">
@@ -196,18 +203,27 @@ export default async function PlanesPage(): Promise<React.ReactElement> {
                   </>
                 )}
               </ul>
-              <Link
-                href={`/checkout?plan=${plan.type}`}
-                data-testid={`plan-${plan.type}-cta`}
-                className={`mt-7 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full text-sm font-medium tracking-tight transition-transform hover:-translate-y-0.5 active:scale-[0.98] ${
-                  plan.includesAura
-                    ? 'bg-zinc-900 text-white hover:bg-zinc-800'
-                    : 'bg-sensu-500 text-white hover:bg-sensu-600'
-                }`}
+              {/* Juan 2026-08-13 (corrected 2026-08-14): the plan he
+                  wanted off was the MONTHLY option, not the annual.
+                  Only the Plan Anual CTA renders now; the $833
+                  headline above frames it as the 12-MSI installment
+                  of the annual. Prior toggles logged above in the
+                  July 31 comment for context. */}
+              <div
+                data-testid={`plan-${plan.type}-picker`}
+                className="mt-7 flex flex-col gap-2.5"
               >
-                Elegir {plan.type === 'ANGELA_TOTAL' ? 'Total' : 'Esencial'}
-                <LuArrowRight aria-hidden className="h-4 w-4" />
-              </Link>
+                <Link
+                  href={`/checkout?plan=${plan.type}&option=B`}
+                  data-testid={`plan-${plan.type}-cta-B`}
+                  className="inline-flex w-full flex-col items-center justify-center gap-0.5 rounded-2xl px-4 py-3 text-sm font-medium tracking-tight transition-transform hover:-translate-y-0.5 active:scale-[0.98] bg-zinc-900 text-white hover:bg-zinc-800"
+                >
+                  <span>Plan Anual · Todo incluido</span>
+                  <span className="text-xs font-normal opacity-90">
+                    $9,996 MXN · pago único, 6 o 12 MSI
+                  </span>
+                </Link>
+              </div>
             </article>
           ))}
         </div>

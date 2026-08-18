@@ -20,6 +20,9 @@ const ACTION_KINDS = [
   'CALLED_EMERGENCY_CONTACT',
   'CALLED_FAMILY',
   'PHONED_AURA',
+  'CALLED_911',
+  'DISPATCHED_AMBULANCE',
+  'FALSE_ALARM',
   'NOTED',
   'RESOLVED',
 ] as const;
@@ -40,7 +43,12 @@ async function requireAdminUserId(): Promise<
     where: { id: userId },
     select: { role: true },
   });
-  if (!user || user.role !== 'ADMIN') return { ok: false, status: 403 };
+  // ADMIN and CALLCENTER both write operator actions (acknowledge,
+  // resolve, mark-noted). The role check stays strict on the route;
+  // FAMILY users are still bounced with 403.
+  if (!user || (user.role !== 'ADMIN' && user.role !== 'CALLCENTER')) {
+    return { ok: false, status: 403 };
+  }
   return { ok: true, userId };
 }
 
@@ -75,21 +83,61 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'event_not_found' }, { status: 404 });
   }
 
-  const action = await prisma.operatorAction.create({
-    data: {
-      eviewEventId: parsed.data.eviewEventId,
-      operatorUserId: gate.userId,
-      kind: parsed.data.kind,
-      note: parsed.data.note ?? null,
-    },
-    select: {
-      id: true,
-      kind: true,
-      note: true,
-      createdAt: true,
-      operator: { select: { fullName: true, email: true } },
-    },
-  });
+  // Graceful unmigrated-enum fallback (Juan 2026-06-26): three new
+  // kinds (CALLED_911, DISPATCHED_AMBULANCE, FALSE_ALARM) were added
+  // to the schema. Until `prisma db push` runs against prod, Postgres
+  // rejects the unknown enum value with 22P02. Catch that specific
+  // error and re-write the row as NOTED with the human-readable
+  // label prefixed to the note, so the dispatcher's action still
+  // lands somewhere visible instead of failing the request.
+  const HUMAN_LABEL: Record<string, string> = {
+    CALLED_911: 'Llamé al 911',
+    DISPATCHED_AMBULANCE: 'Despaché ambulancia',
+    FALSE_ALARM: 'Falsa alarma',
+  };
+  let action;
+  try {
+    action = await prisma.operatorAction.create({
+      data: {
+        eviewEventId: parsed.data.eviewEventId,
+        operatorUserId: gate.userId,
+        kind: parsed.data.kind,
+        note: parsed.data.note ?? null,
+      },
+      select: {
+        id: true,
+        kind: true,
+        note: true,
+        createdAt: true,
+        operator: { select: { fullName: true, email: true } },
+      },
+    });
+  } catch (err) {
+    const msg = (err as { message?: string } | null)?.message ?? '';
+    const isUnmigratedEnum =
+      /invalid input value for enum/i.test(msg) &&
+      /OperatorActionKind/i.test(msg);
+    if (!isUnmigratedEnum) throw err;
+    const label = HUMAN_LABEL[parsed.data.kind] ?? parsed.data.kind;
+    const composedNote = parsed.data.note?.trim()
+      ? `${label} — ${parsed.data.note.trim()}`
+      : label;
+    action = await prisma.operatorAction.create({
+      data: {
+        eviewEventId: parsed.data.eviewEventId,
+        operatorUserId: gate.userId,
+        kind: 'NOTED',
+        note: composedNote,
+      },
+      select: {
+        id: true,
+        kind: true,
+        note: true,
+        createdAt: true,
+        operator: { select: { fullName: true, email: true } },
+      },
+    });
+  }
 
   return NextResponse.json({ action });
 }

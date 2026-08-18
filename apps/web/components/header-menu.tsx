@@ -89,8 +89,22 @@ export function HeaderMenu({
     setOpen(false);
   }, [pathname]);
 
-  const isActive = (href: string): boolean =>
-    pathname === href || pathname.startsWith(`${href}/`);
+  // Active-state — only the most-specific match highlights. Prevents
+  // `/profile` AND `/profile/referrals` both lighting up when the user
+  // is on the sub-route. Sibling routes can't both match because we
+  // score by prefix length and pick one winner.
+  const bestMatch = (() => {
+    let best: { href: string; length: number } | null = null;
+    for (const it of items) {
+      if (pathname === it.href || pathname.startsWith(`${it.href}/`)) {
+        if (!best || it.href.length > best.length) {
+          best = { href: it.href, length: it.href.length };
+        }
+      }
+    }
+    return best?.href ?? null;
+  })();
+  const isActive = (href: string): boolean => href === bestMatch;
 
   const groups: Group[] = [];
   for (const key of ['attention', 'primary', 'admin'] as const) {
@@ -129,32 +143,41 @@ export function HeaderMenu({
             : 'opacity-0 -translate-y-1 scale-95 pointer-events-none'
         }`}
       >
-        {/* The inner panel does NOT use overflow-hidden because the
+        {/* The outer panel does NOT use overflow-hidden because the
             nested flyout for rows with sub-items renders as an
             absolute child and must extend past the panel's left
             edge. Hover backgrounds are inset with `mx-1 rounded-xl`
-            on each list item to keep the rounded shape clean. */}
-        <div className="w-64 rounded-2xl bg-white ring-1 ring-zinc-200 shadow-[0_2px_4px_rgba(15,23,42,0.06),0_24px_60px_rgba(15,23,42,0.18)]">
-          {groups.map((g, gi) => (
-            <ul
-              key={g.key}
-              data-testid={`header-menu-group-${g.key}`}
-              className={
-                gi === 0
-                  ? 'py-1'
-                  : 'border-t border-zinc-200/70 py-1'
-              }
-            >
-              {g.items.map((item) => (
-                <MenuRow
-                  key={item.href}
-                  item={item}
-                  isActive={isActive}
-                  onSelect={() => setOpen(false)}
-                />
-              ))}
-            </ul>
-          ))}
+            on each list item to keep the rounded shape clean.
+
+            Admin accounts have enough menu rows that the panel used
+            to stretch off-screen on shorter viewports (Ustym
+            2026-08-10). The groups list is now wrapped in an inner
+            scrollable region capped at 68vh; the Cerrar sesión row
+            stays anchored below the scroll so signing out never
+            requires paging through the list. */}
+        <div className="w-64 flex flex-col rounded-2xl bg-white ring-1 ring-zinc-200 shadow-[0_2px_4px_rgba(15,23,42,0.06),0_24px_60px_rgba(15,23,42,0.18)]">
+          <div className="max-h-[68vh] overflow-y-auto overscroll-contain">
+            {groups.map((g, gi) => (
+              <ul
+                key={g.key}
+                data-testid={`header-menu-group-${g.key}`}
+                className={
+                  gi === 0
+                    ? 'py-1'
+                    : 'border-t border-zinc-200/70 py-1'
+                }
+              >
+                {g.items.map((item) => (
+                  <MenuRow
+                    key={item.href}
+                    item={item}
+                    isActive={isActive}
+                    onSelect={() => setOpen(false)}
+                  />
+                ))}
+              </ul>
+            ))}
+          </div>
           {showLogout ? (
             <div className="border-t border-zinc-200/70 py-1">
               <button

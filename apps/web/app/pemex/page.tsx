@@ -7,15 +7,17 @@ import {
   LuSmartphone,
 } from 'react-icons/lu';
 import { prisma } from '@/lib/db';
-import { fetchActivePlans, formatPriceMXN } from '@/lib/plans';
+import { fetchActivePlans, formatAmountMXN } from '@/lib/plans';
 import { sensuContact } from '@/lib/contact-info';
 import {
   SHIPPING_NET_CENTAVOS,
   grossCentsForNet,
+  isFreeShippingActive,
 } from '@/lib/plans';
+import { env } from '@/lib/env';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/image/upload/c_fill,g_auto,w_1200,h_630,q_auto,f_jpg/v1780582692/sensu/landing/angela-device.png';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu × Pemex — Beneficio para empleados',
@@ -77,7 +79,15 @@ export default async function PemexPage(): Promise<React.ReactElement> {
   const recurringNet = plan.priceAnnualCents ?? 0;
   const initialFeeNet = plan.initialFeeCents ?? 0;
   const grossInitialFee = grossCentsForNet(initialFeeNet);
-  const grossShipping = grossCentsForNet(SHIPPING_NET_CENTAVOS);
+  // Juan 2026-07-20: Sensu now absorbs shipping. Zero it out on the
+  // PEMEX comparison so the pre-discount total matches what the buyer
+  // sees on /checkout.
+  const grossShipping = isFreeShippingActive(
+    Date.now(),
+    env.NUCLEUS_FREE_SHIPPING_UNTIL_ISO,
+  )
+    ? 0
+    : grossCentsForNet(SHIPPING_NET_CENTAVOS);
   const grossRecurring = grossCentsForNet(recurringNet);
   const regularTotal = grossInitialFee + grossShipping + grossRecurring;
   const discountedTotal = Math.round(
@@ -122,13 +132,13 @@ export default async function PemexPage(): Promise<React.ReactElement> {
             {plan.name} · Plan anual
           </p>
           <p className="mt-4 text-sm text-zinc-500 line-through tabular-nums">
-            Precio regular {formatPriceMXN(regularTotal)}
+            Precio regular {formatAmountMXN(regularTotal)}
           </p>
           <p
             data-testid="pemex-price-discounted"
             className="mt-1 text-4xl font-semibold tracking-tight text-zinc-900 tabular-nums"
           >
-            {formatPriceMXN(discountedTotal)}
+            {formatAmountMXN(discountedTotal)}
             <span className="ml-2 align-middle text-sm font-medium text-zinc-500">
               / año
             </span>
@@ -137,7 +147,7 @@ export default async function PemexPage(): Promise<React.ReactElement> {
             data-testid="pemex-price-savings"
             className="mt-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-100"
           >
-            Ahorras {formatPriceMXN(youSave)} con tu beneficio Pemex
+            Ahorras {formatAmountMXN(youSave)} al año con tu beneficio Pemex
           </p>
 
           <ul className="mt-6 space-y-3 text-sm text-zinc-700">

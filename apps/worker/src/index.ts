@@ -20,6 +20,8 @@ import { saveEviewEvent } from './save-event';
 import { dispatchAlertPush } from './push';
 import { startDripTick } from './drip-tick';
 import { startStripeCleanupTick } from './stripe-cleanup-tick';
+import { startReferralExpirationTick } from './referral-expiration-tick';
+import { startRenewalTick } from './renewal-tick';
 
 // Event types that trigger a push notification. Mirrors the web app's
 // ALERT_EVENT_TYPES list — keep in sync if you add an alert class.
@@ -31,6 +33,13 @@ const PUSH_TRIGGERING_TYPES = new Set([
   'geofence_exit',
   'button_press',
 ]);
+
+// Subset of PUSH_TRIGGERING_TYPES that must fire a push even when the
+// 180 s dedup window swallows the row (Juan 2026-08-07). A family
+// member in distress presses the SOS repeatedly because they hear
+// nothing; the system must buzz their family's phones every time,
+// even if the alerts feed only shows the first row.
+const CRITICAL_PUSH_TYPES = new Set(['sos', 'fall_detection']);
 
 const prisma = new PrismaClient();
 const startedAt = new Date();
@@ -132,6 +141,58 @@ async function handleMessage(topic: string, raw: Buffer): Promise<void> {
         deviceId: parsed.deviceId,
         eventType: classified.eventType,
       });
+
+      // Critical override (Juan 2026-08-07): the 180 s dedup window
+      // exists so Eview device retransmits do not stack duplicate
+      // rows in the feed. That's fine for row storage but LIFE
+      // THREATENING for SOS + fall — a family member in distress
+      // presses the button repeatedly because they hear nothing,
+      // and the system silently swallowed presses 2, 3, 4… Fix:
+      // dedup the DB row as before, but ALWAYS fire a push on
+      // critical types using the original (non-deduped) event's
+      // id so the notification pipeline treats it as one logical
+      // alert while still buzzing the family's phone every time
+      // the button is pressed.
+      if (CRITICAL_PUSH_TYPES.has(classified.eventType)) {
+        try {
+          const original = await prisma.eviewEvent.findFirst({
+            where: {
+              eviewDeviceId: parsed.deviceId,
+              eventType: classified.eventType,
+              timestamp: {
+                gte: new Date(timestamp.getTime() - 180_000),
+                lte: new Date(timestamp.getTime() + 5_000),
+              },
+            },
+            orderBy: { timestamp: 'desc' },
+            select: { id: true },
+          });
+          if (original) {
+            const attempts = await dispatchAlertPush(prisma, parsed.deviceId, {
+              type: classified.eventType,
+              deviceId: parsed.deviceId,
+              eventId: original.id,
+              timestamp: timestamp.toISOString(),
+            });
+            if (attempts > 0) {
+              log('info', 'push re-dispatched on dedup', {
+                eventId: original.id,
+                eventType: classified.eventType,
+                attempts,
+              });
+            }
+          } else {
+            log('warn', 'critical dedup with no original found', {
+              deviceId: parsed.deviceId,
+              eventType: classified.eventType,
+            });
+          }
+        } catch (err) {
+          log('error', 'critical dedup re-dispatch failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     }
   } catch (err) {
     failedCount += 1;
@@ -231,11 +292,34 @@ async function main(): Promise<void> {
     error: (msg, extra) => log('error', msg, extra),
   });
 
+  // Referral expiration sweep — daily POST to
+  // /api/jobs/referral-expiration-tick that flips PENDING referrals
+  // older than 90 days to EXPIRED. Keeps the admin reporting panel
+  // honest and frees referrers to share their code with someone new.
+  const referralExpirationTimer = startReferralExpirationTick({
+    info: (msg, extra) => log('info', msg, extra),
+    warn: (msg, extra) => log('warn', msg, extra),
+    error: (msg, extra) => log('error', msg, extra),
+  });
+
+  // Renewal worker — hourly POST to /api/jobs/renewal-tick. Three
+  // phases per tick: send 7-day-out reminders, attempt off-session
+  // charges on due subscriptions, promote PAST_DUE rows to CANCELLED
+  // after their grace window expires. Drives the full recurring
+  // revenue loop without manual intervention.
+  const renewalTimer = startRenewalTick({
+    info: (msg, extra) => log('info', msg, extra),
+    warn: (msg, extra) => log('warn', msg, extra),
+    error: (msg, extra) => log('error', msg, extra),
+  });
+
   const shutdown = async (signal: string): Promise<void> => {
     log('info', 'shutting down', { signal });
     clearInterval(healthTimer);
     if (dripTimer) clearInterval(dripTimer);
     if (stripeCleanupTimer) clearInterval(stripeCleanupTimer);
+    if (referralExpirationTimer) clearInterval(referralExpirationTimer);
+    if (renewalTimer) clearInterval(renewalTimer);
     await new Promise<void>((resolve) => {
       client.end(false, {}, () => resolve());
     });

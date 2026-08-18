@@ -9,7 +9,7 @@
  *      so two near-simultaneous trackerAlarm messages don't both pass the
  *      dedup check. Race window without the lock is ~5 ms but real.
  *
- *   2. 60-second dedup window keyed on (deviceId, eventType, statusCode).
+ *   2. 180-second dedup window keyed on (deviceId, eventType, statusCode).
  *      Devices retransmit alarms while the call is open. We don't want a
  *      single SOS press to stack four rows in the feed.
  *
@@ -21,7 +21,12 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { parseButtonType } from './alarm';
 import { recordParityCheck } from './parity';
 
-const DEDUP_WINDOW_SECONDS = 60;
+// 180s dedup window — raised from 60s on 2026-06-16 after Juan's live
+// SOS test (2026-05-22) showed Eview retransmitting the same alarm
+// 2–3 minutes apart on EV-12 hardware. DB scan confirmed: 5 duplicates
+// landed in the 60–180s band over 30 days. Beyond 180s we treat the
+// alarm as a legitimate second press, not a retransmit.
+const DEDUP_WINDOW_SECONDS = 180;
 const INT32_MAX = 0x7fffffff;
 
 /**

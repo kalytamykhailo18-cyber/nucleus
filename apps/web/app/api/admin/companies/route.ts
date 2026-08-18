@@ -14,8 +14,13 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(): Promise<NextResponse> {
   await requireAdmin();
-  const companies = await fetchCompanies();
-  return NextResponse.json({ ok: true, companies });
+  // GET returns the full unfiltered list (helper-script callers expect
+  // every row, not the paginated /admin/companies view). 2026-06-24:
+  // fetchCompanies now returns { rows, totalRows, ... }; flatten back
+  // to the legacy `{ companies: [...] }` shape so existing callers
+  // keep working.
+  const result = await fetchCompanies({ pageSize: 10_000 });
+  return NextResponse.json({ ok: true, companies: result.rows });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

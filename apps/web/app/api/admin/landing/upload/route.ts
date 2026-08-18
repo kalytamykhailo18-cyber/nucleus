@@ -1,31 +1,41 @@
-import crypto from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { writeFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import { NextResponse, type NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/admin';
 import { env } from '@/lib/env';
 
 /**
- * Signed Cloudinary upload for landing-page images (Step 15).
+ * Self-hosted upload for landing-page images.
  *
- * Admins post a multipart form with `file` from the EditableImage
- * widget. The server signs with the CLOUDINARY_API_SECRET (kept off
- * the browser) and forwards to Cloudinary's REST endpoint, returning
- * the `secure_url`. The EditableImage component then PATCHes
- * /api/admin/landing/[slug] with the URL.
+ * Admin posts a multipart form with `file` from the EditableImage
+ * widget. The file is written to NUCLEUS_UPLOADS_DIR/landing/<slug>_<ts>_<rand>.<ext>
+ * and the public URL is returned. The EditableImage component then
+ * PATCHes /api/admin/landing/[slug] with the URL so the LandingItem
+ * row stores it.
  *
- * Mirrors the profile-avatar upload shape — different folder + tag.
+ * Replaces the Cloudinary signed-upload flow (retired 2026-06-26
+ * when the upstream account `dcfjvxt5h` was disabled). The mount lives
+ * on the EC2 disk so the marketing surface no longer depends on a
+ * third-party CDN that can suspend the account without warning.
+ *
+ * nginx exposes NUCLEUS_UPLOADS_DIR at NUCLEUS_UPLOADS_PUBLIC_BASE
+ * with long-cache headers; the random suffix in the filename means a
+ * re-upload always invalidates without a cache-bust query string.
  */
 export const dynamic = 'force-dynamic';
 
 const MAX_BYTES = 12 * 1024 * 1024;
-const FOLDER = 'sensu/landing';
+const SUBDIR = 'landing';
 
-function signParams(params: Record<string, string>, apiSecret: string): string {
-  const toSign = Object.keys(params)
-    .sort()
-    .map((k) => `${k}=${params[k]}`)
-    .join('&');
-  return crypto.createHash('sha1').update(toSign + apiSecret).digest('hex');
-}
+const EXT_BY_MIME: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/avif': 'avif',
+};
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   await requireAdmin();
@@ -40,7 +50,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'missing_file' }, { status: 400 });
   }
-  if (!file.type.startsWith('image/')) {
+  const ext = EXT_BY_MIME[file.type];
+  if (!ext) {
     return NextResponse.json({ error: 'not_an_image' }, { status: 400 });
   }
   if (file.size > MAX_BYTES) {
@@ -49,41 +60,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 413 },
     );
   }
+
   const slugRaw = String(form.get('slug') ?? 'unknown');
   const slug = /^[a-z0-9-]+$/.test(slugRaw) ? slugRaw : 'unknown';
 
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const params: Record<string, string> = {
-    folder: FOLDER,
-    timestamp,
-    public_id: `${slug}_${timestamp}`,
-  };
-  const signature = signParams(params, env.CLOUDINARY_API_SECRET);
+  const rand = randomUUID().slice(0, 8);
+  const filename = `${slug}_${timestamp}_${rand}.${ext}`;
 
-  const upload = new FormData();
-  upload.set('file', file);
-  upload.set('api_key', env.CLOUDINARY_API_KEY);
-  upload.set('timestamp', timestamp);
-  upload.set('signature', signature);
-  for (const [k, v] of Object.entries(params)) {
-    if (k !== 'timestamp') upload.set(k, v);
-  }
+  const targetDir = path.join(env.NUCLEUS_UPLOADS_DIR, SUBDIR);
+  await mkdir(targetDir, { recursive: true });
+  const targetPath = path.join(targetDir, filename);
 
-  const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/image/upload`;
-  const res = await fetch(cloudinaryUrl, { method: 'POST', body: upload });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    return NextResponse.json(
-      { error: 'cloudinary_upload_failed', detail: text.slice(0, 500) },
-      { status: 502 },
-    );
-  }
-  const body = (await res.json()) as { secure_url?: string };
-  if (!body.secure_url) {
-    return NextResponse.json(
-      { error: 'cloudinary_no_url' },
-      { status: 502 },
-    );
-  }
-  return NextResponse.json({ url: body.secure_url });
+  const buffer = Buffer.from(await file.arrayBuffer());
+  await writeFile(targetPath, buffer);
+
+  const publicUrl = `${env.NUCLEUS_UPLOADS_PUBLIC_BASE}/${SUBDIR}/${filename}`;
+  return NextResponse.json({ url: publicUrl });
 }

@@ -102,6 +102,15 @@ export function AdminCompaniesClient({
   initialCompanies: CompanySummary[];
 }): React.ReactElement {
   const router = useRouter();
+  // Local mirror of the server-fetched list. router.refresh() reconciles
+  // it in the background, but the create/edit/delete handlers patch this
+  // state directly so the UI updates the instant the POST returns —
+  // critical on a table with hundreds of rows where the server re-render
+  // round-trip is too slow for the modal-close → row-visible expectation.
+  const [companies, setCompanies] = useState<CompanySummary[]>(initialCompanies);
+  useEffect(() => {
+    setCompanies(initialCompanies);
+  }, [initialCompanies]);
   const [editing, setEditing] = useState<
     | { mode: 'create'; draft: CompanyDraft }
     | { mode: 'edit'; id: string; draft: CompanyDraft }
@@ -313,6 +322,31 @@ export function AdminCompaniesClient({
         setBusy(false);
         return;
       }
+      if (editing.mode === 'create') {
+        const created = await res.json().catch(() => ({}));
+        const createdId = typeof created.id === 'string' ? created.id : null;
+        if (createdId) {
+          const optimistic: CompanySummary = {
+            id: createdId,
+            name: payload.name,
+            contactName: payload.contactName,
+            contactEmail: payload.contactEmail,
+            contactPhone: payload.contactPhone,
+            notes: payload.notes,
+            isActive: payload.isActive,
+            isManagedFleet: payload.isManagedFleet,
+            createdAt: new Date().toISOString(),
+            adminCount: 0,
+            memberCount: 0,
+          };
+          setCompanies((prev) => [optimistic, ...prev]);
+        }
+      } else {
+        const editId = editing.id;
+        setCompanies((prev) =>
+          prev.map((c) => (c.id === editId ? { ...c, ...payload } : c)),
+        );
+      }
       setEditing(null);
       router.refresh();
     } catch {
@@ -334,6 +368,8 @@ export function AdminCompaniesClient({
         setBusy(false);
         return;
       }
+      const deletedId = deleting.id;
+      setCompanies((prev) => prev.filter((c) => c.id !== deletedId));
       setDeleting(null);
       router.refresh();
     } catch {
@@ -350,9 +386,9 @@ export function AdminCompaniesClient({
           data-testid="admin-companies-count"
           className="text-sm text-zinc-500"
         >
-          {initialCompanies.length === 1
+          {companies.length === 1
             ? '1 empresa'
-            : `${initialCompanies.length.toLocaleString('es-MX')} empresas`}
+            : `${companies.length.toLocaleString('es-MX')} empresas`}
         </p>
         <button
           type="button"
@@ -365,7 +401,7 @@ export function AdminCompaniesClient({
         </button>
       </header>
 
-      {initialCompanies.length === 0 ? (
+      {companies.length === 0 ? (
         <p
           data-testid="admin-companies-empty"
           className="card-surface rounded-3xl px-6 py-10 text-center text-sm text-zinc-500"
@@ -374,7 +410,7 @@ export function AdminCompaniesClient({
         </p>
       ) : (
         <ul className="space-y-3" data-testid="admin-companies-list">
-          {initialCompanies.map((c) => (
+          {companies.map((c) => (
             <li
               key={c.id}
               data-testid={`admin-company-${c.id}`}
@@ -487,6 +523,7 @@ export function AdminCompaniesClient({
                   })
                 }
                 data-testid="admin-companies-input-name"
+                autoComplete="off"
                 className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
               />
             </Field>
@@ -501,6 +538,7 @@ export function AdminCompaniesClient({
                   })
                 }
                 data-testid="admin-companies-input-contact-name"
+                autoComplete="off"
                 className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
               />
             </Field>
@@ -516,6 +554,7 @@ export function AdminCompaniesClient({
                     })
                   }
                   data-testid="admin-companies-input-contact-email"
+                  autoComplete="off"
                   className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
                 />
               </Field>
@@ -530,6 +569,7 @@ export function AdminCompaniesClient({
                     })
                   }
                   data-testid="admin-companies-input-contact-phone"
+                  autoComplete="off"
                   className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-sensu-400 focus:ring-2 focus:ring-sensu-200"
                 />
               </Field>

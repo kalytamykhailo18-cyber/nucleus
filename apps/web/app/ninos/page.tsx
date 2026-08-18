@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AudiencePage } from '@/components/audience-page';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/video/upload/c_fill,g_auto,w_1200,h_630,so_0,f_jpg,q_auto/v1780582704/sensu/landing/ninos-promo.jpg';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu para niños — Libertad con respaldo',
@@ -43,7 +43,7 @@ export default async function NinosPage(): Promise<React.ReactElement> {
         closing:
           'Porque proteger a tus hijos no es limitarlos. Es darles libertad con un respaldo real detrás.',
         videoUrl:
-          'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582704/sensu/landing/ninos-promo.mp4',
+          '',
       }}
     />
   );

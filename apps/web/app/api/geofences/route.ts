@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import {
   GEOFENCE_DIRECTIONS,
   createGeofence,
@@ -10,11 +10,9 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
   const geofences = await fetchUserGeofences(userId);
   return NextResponse.json({ geofences });
 }
@@ -29,11 +27,9 @@ const createSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
 
   let raw: unknown;
   try {

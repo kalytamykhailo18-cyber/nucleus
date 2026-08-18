@@ -347,7 +347,7 @@ export function DeviceMap({ devices }: { devices: DeviceSummary[] }) {
     return (
       <div
         data-testid="device-map-empty"
-        className="card-surface -mx-6 flex h-[66vh] min-h-[360px] flex-col items-center justify-center rounded-none px-8 text-center sm:mx-0 sm:rounded-3xl"
+        className="card-surface -mx-6 flex h-[45vh] min-h-[280px] flex-col items-center justify-center rounded-none px-8 text-center sm:mx-0 sm:h-[66vh] sm:min-h-[360px] sm:rounded-3xl"
       >
         <LuMapPin aria-hidden className="h-6 w-6 text-sensu-500" />
         <p className="mt-3 text-sm font-medium text-zinc-700">
@@ -366,7 +366,7 @@ export function DeviceMap({ devices }: { devices: DeviceSummary[] }) {
     //  z-1000 in the root context always wins.
     <div
       data-testid="device-map"
-      className="card-surface relative z-0 -mx-6 h-[66vh] min-h-[360px] overflow-hidden rounded-none sm:mx-0 sm:rounded-3xl"
+      className="card-surface relative z-0 -mx-6 h-[45vh] min-h-[280px] sm:h-[66vh] sm:min-h-[360px] overflow-hidden rounded-none sm:mx-0 sm:rounded-3xl"
     >
       <div ref={containerRef} className="absolute inset-0" />
       <div

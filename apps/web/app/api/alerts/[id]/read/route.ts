@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import { markAlertRead } from '@/lib/alerts';
 
 export const dynamic = 'force-dynamic';
@@ -8,11 +8,9 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+  const userId = gate.userId;
 
   const { id } = await params;
   const result = await markAlertRead(userId, id);

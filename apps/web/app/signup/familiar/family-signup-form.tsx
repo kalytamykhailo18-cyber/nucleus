@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LuCircleAlert, LuEye, LuEyeOff, LuShield, LuUsers } from 'react-icons/lu';
 import {
@@ -20,6 +20,14 @@ const submitBase =
 
 export default function FamilySignupForm(): React.ReactElement {
   const router = useRouter();
+  // Juan 2026-06-26 — when a relative scans the /profile QR, the IMEI
+  // + Client ID + share password arrive as URL params. Use them as
+  // defaultValue on the uncontrolled inputs so the form is one-tap
+  // away from the relative's own name/email/password.
+  const searchParams = useSearchParams();
+  const qrImei = searchParams.get('imei') ?? '';
+  const qrClientId = searchParams.get('clientId') ?? '';
+  const qrShareCode = searchParams.get('shareCode')?.toUpperCase() ?? '';
   const [state, formAction, pending] = useActionState(
     familySignupAction,
     initialState,
@@ -91,6 +99,7 @@ export default function FamilySignupForm(): React.ReactElement {
               minLength={8}
               maxLength={20}
               required
+              defaultValue={qrImei}
               className={`${fieldBase} font-mono`}
             />
           </label>
@@ -106,6 +115,7 @@ export default function FamilySignupForm(): React.ReactElement {
                 inputMode="numeric"
                 pattern="\d{6}"
                 required
+                defaultValue={qrClientId}
                 className={`${fieldBase} font-mono`}
               />
             </label>
@@ -120,6 +130,7 @@ export default function FamilySignupForm(): React.ReactElement {
                 minLength={8}
                 maxLength={8}
                 required
+                defaultValue={qrShareCode}
                 className={`${fieldBase} font-mono uppercase`}
               />
             </label>

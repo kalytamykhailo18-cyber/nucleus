@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AudiencePage } from '@/components/audience-page';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/video/upload/c_fill,g_auto,w_1200,h_630,so_0,f_jpg,q_auto/v1780582690/sensu/landing/adultos-mayores-promo.jpg';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu para adultos mayores — Independencia con respaldo',
@@ -43,7 +43,7 @@ export default async function AdultosMayoresPage(): Promise<React.ReactElement> 
         closing:
           'Porque envejecer con dignidad es vivir con independencia, sabiendo que si algo pasa, la ayuda llega en segundos.',
         videoUrl:
-          'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582690/sensu/landing/adultos-mayores-promo.mp4',
+          '',
       }}
     />
   );

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AudiencePage } from '@/components/audience-page';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/video/upload/c_fill,g_auto,w_1200,h_630,so_0,f_jpg,q_auto/v1780582702/sensu/landing/especializado-promo.jpg';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu especializado — Nos adaptamos a ti',
@@ -41,7 +41,7 @@ export default async function EspecializadoPage(): Promise<React.ReactElement> {
         closing:
           'No se trata de un perfil específico. Se trata de cualquier persona que quiera libertad con respaldo.',
         videoUrl:
-          'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582702/sensu/landing/especializado-promo.mov',
+          '',
       }}
     />
   );

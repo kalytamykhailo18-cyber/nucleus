@@ -1,6 +1,6 @@
 import { LuRadio } from 'react-icons/lu';
 import { SectionLabel } from '@/components/section-label';
-import { requireAdmin } from '@/lib/admin';
+import { requireCallcenterOrAdmin } from '@/lib/admin';
 import { env } from '@/lib/env';
 import { fetchOperatorBoard } from '@/lib/operator-board';
 import { fetchOperatorPresence } from '@/lib/operator-presence';
@@ -16,16 +16,18 @@ export default async function AdminOperatorPage({
 }: {
   searchParams: Promise<{ page?: string }>;
 }): Promise<React.ReactElement> {
-  await requireAdmin();
+  const admin = await requireCallcenterOrAdmin();
   const params = await searchParams;
   const pageNumber = (() => {
     const n = Number(params.page);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
   })();
   const [board, presence, mapAlerts] = await Promise.all([
-    fetchOperatorBoard(pageNumber, PAGE_SIZE),
+    fetchOperatorBoard(pageNumber, PAGE_SIZE, {
+      callcenterMode: admin.callcenterMode,
+    }),
     fetchOperatorPresence(),
-    fetchOperatorMapAlerts(),
+    fetchOperatorMapAlerts({ callcenterMode: admin.callcenterMode }),
   ]);
   const auraCallNumber = env.AURA_CALL_CENTER_NUMBER;
 

@@ -46,6 +46,13 @@ enum SubscriptionStatus {
   ACTIVE
   PAST_DUE
   CANCELLED
+  // 2026-06-18 — admin-paused (Juan / call-center triggers it from
+  // /admin/registrations/[id] when a family asks for a vacation hold
+  // or hospitalization break). Renewal worker skips PAUSED rows; the
+  // family-side dashboard renders the same "Servicio Sensu" tile as
+  // ACTIVE so the customer still sees their data, just no new charge
+  // fires until an admin flips it back to ACTIVE.
+  PAUSED
 }
 
 enum PurchaseType {
@@ -81,7 +88,7 @@ enum BillingCadence {
 
 enum DeviceType {
   PENDANT // Eview button pendant
-  HUB     // Future: hub device
+  HUB // Future: hub device
 }
 
 enum GeofenceDirection {
@@ -105,6 +112,20 @@ enum BloodType {
 enum UserRole {
   USER
   ADMIN
+  // Call-center dispatcher (Juan 2026-06-17). Narrower than ADMIN: can
+  // reach /admin/operator (alert queue), /admin/check-ins (weekly call
+  // queue), and /admin/fleet (read-only device map) plus their
+  // supporting API routes. Cannot touch dispatch / companies /
+  // reporting / audit / parity / marketing. ADMIN remains the full
+  // god-mode role for Sensu staff who run the business surface.
+  CALLCENTER
+  // WhatsApp assisted-sales rep (Juan 2026-06-22). Even narrower than
+  // CALLCENTER: SALES sees ONLY /admin/assisted-sales (the payment-
+  // link generator). Every other /admin/* surface bounces back to the
+  // assisted-sales page. The role exists so Juan can hand each sales
+  // rep their own login without giving them visibility into customer
+  // data, operator queue, audit log, or financial reporting.
+  SALES
 }
 
 // Industrial-fleet reshape (Phase C #1, Juan 2026-06-10). A FAMILY user
@@ -178,24 +199,32 @@ model LandingItem {
 // ============================================
 
 model User {
-  id                     String             @id @default(cuid())
+  id String @id @default(cuid())
 
   // Authentication (for API/dashboard access)
-  username               String?            @unique
-  email                  String             @unique
-  passwordHash           String?            // Only set for API/dashboard users
-  isActive               Boolean            @default(true)
-  lastLogin              DateTime?
-  role                   UserRole           @default(USER)
+  username       String?   @unique
+  email          String    @unique
+  passwordHash   String? // Only set for API/dashboard users
+  isActive       Boolean   @default(true)
+  lastLogin      DateTime?
+  role           UserRole  @default(USER)
   // Industrial-fleet reshape (Phase C #1, Juan 2026-06-10). FAMILY is
   // the default SaaS-rail end-customer (real email, login, profile).
   // MANAGED_WORKER is a device-only worker row owned by a Company's
   // HR lead: synthetic email, no passwordHash, no own emergency
   // contacts. Filtered out of /admin/registrations.
-  kind                   UserKind           @default(FAMILY)
+  kind           UserKind  @default(FAMILY)
+  // Call-center dispatcher view (Juan 2026-06-17). When true the
+  // /admin/operator queue + map hide our seeded demo / test devices
+  // (EV-DEMO-*, EV-GEOCRUD-*, EV-NOGPS-*) and restrict event types to
+  // emergency-only (sos, fall_detection). Battery-low / geofence /
+  // button-press still surface for the family-side feed and for non-
+  // call-center admins. Defaults false so spec coverage + Juan's own
+  // hands-on demos against demo@sensu.com.mx stay unchanged.
+  callcenterMode Boolean   @default(false)
 
   // Contact Info
-  phone                  String?
+  phone String?
 
   // Family-share credentials (Juan 2026-05-15). When the user becomes
   // a Master (their first UserDevice row lands with role=MASTER), we
@@ -203,56 +232,56 @@ model User {
   // Relatives use these (plus the device IMEI) to claim a Watcher seat
   // through the "Soy familiar" signup path. Both stay on the User row
   // so the Master sees the same pair across devices.
-  clientId               String?            @unique
-  shareCode              String?
+  clientId  String? @unique
+  shareCode String?
 
   // Profile/Questionnaire Data
-  fullName               String?
-  dateOfBirth            DateTime?
-  age                    Int?
-  gender                 Gender?
-  curp                   String?            // CURP (18-char Mexican personal ID)
+  fullName        String?
+  dateOfBirth     DateTime?
+  age             Int?
+  gender          Gender?
+  curp            String? // CURP (18-char Mexican personal ID)
   // RFC homoclave — last 3 chars of the federal taxpayer ID, optional.
   // Aura's affiliate layout (Juan 2026-05-19) builds the identifier as
   // `curp[0..10] + (rfcHomoclave || 'XXX')` so we always have a valid
   // RFC-shaped string even when the customer hasn't been assigned one.
-  rfcHomoclave           String?
-  address                String?
-  shippingAddress        String?
-  housingType            HousingType?
-  livesAlone             Boolean?
+  rfcHomoclave    String?
+  address         String?
+  shippingAddress String?
+  housingType     HousingType?
+  livesAlone      Boolean?
 
   // Optional weekly check-in service. Operators call the senior once a
   // week to confirm they are well. checkInDay + checkInTimeOfDay only
   // matter when checkInEnabled is true.
-  checkInEnabled         Boolean            @default(false)
-  checkInDay             CheckInDay?
-  checkInTimeOfDay       CheckInTimeOfDay?
+  checkInEnabled   Boolean           @default(false)
+  checkInDay       CheckInDay?
+  checkInTimeOfDay CheckInTimeOfDay?
 
   // Medical Info (from profiles table)
-  heightCm               Int?
-  weightKg               Float?
-  bloodType              BloodType?
-  userPhone              String?            // Phone number of the device user (optional)
-  medicalConditions      String?            // Free text medical conditions
-  medications            Json?              // Array of medications
-  insuranceInfo          String?            // Insurance/ambulance service info
+  heightCm          Int?
+  weightKg          Float?
+  bloodType         BloodType?
+  userPhone         String? // Phone number of the device user (optional)
+  medicalConditions String? // Free text medical conditions
+  medications       Json? // Array of medications
+  insuranceInfo     String? // Insurance/ambulance service info
 
   // Subscription/Payment (from Customer)
-  stripeCustomerId       String?            @unique
-  questionnaireCompleted Boolean            @default(false)
+  stripeCustomerId       String? @unique
+  questionnaireCompleted Boolean @default(false)
 
   // Profile image
-  profileImageUrl        String?
+  profileImageUrl String?
 
   // Push notifications
-  expoPushToken          String?
+  expoPushToken String?
 
   // Operator heartbeat (Phase B polish, 2026-06-10). Updated every 30 s
   // from /admin/operator while the tab is open. "On shift now" = ping
   // within the last 60 s; the gap is generous so a single dropped beat
   // from a Wi-Fi blip does not flicker the operator off the panel.
-  lastOperatorPingAt     DateTime?
+  lastOperatorPingAt DateTime?
 
   // Where this signup came from (Phase A+ #2, 2026-06-10). Free text so
   // new partner channels never need a migration: "organic", "pemex",
@@ -261,33 +290,66 @@ model User {
   // when ?promo= is present → null. One-way synced to HubSpot as
   // `signup_source` so marketing attribution is live the moment a buyer
   // converts.
-  signupSource           String?
+  signupSource String?
 
   // Timestamps
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  emergencyContacts      EmergencyContact[]
-  subscriptions          Subscription[]
-  devices                UserDevice[]
-  geofences              Geofence[]
-  passwordResets         PasswordReset[]
-  alertReads             AlertRead[]
-  pushSubscriptions      PushSubscription[]
+  emergencyContacts  EmergencyContact[]
+  subscriptions      Subscription[]
+  devices            UserDevice[]
+  geofences          Geofence[]
+  passwordResets     PasswordReset[]
+  alertReads         AlertRead[]
+  pushSubscriptions  PushSubscription[]
   // Family invite system (Juan 2026-05-15 — see FamilyInvite model).
-  mintedInvites          FamilyInvite[]    @relation("FamilyInviteMaster")
-  claimedInvites         FamilyInvite[]    @relation("FamilyInviteConsumer")
+  mintedInvites      FamilyInvite[]      @relation("FamilyInviteMaster")
+  claimedInvites     FamilyInvite[]      @relation("FamilyInviteConsumer")
   // Call-center dispatch log (Phase B, 2026-05-21). Every action an
   // operator records against an actionable EviewEvent (phoned the
   // senior, phoned a contact, phoned Aura, marked resolved) is a row
   // here keyed by the operator's User.id.
-  operatorActions        OperatorAction[]
+  operatorActions    OperatorAction[]
   // B2B membership (2026-05-28). A user can belong to one Company as
   // either an ADMIN (HR / Safety lead who monitors the workers) or a
   // MEMBER (worker wearing the device). Many-to-many table so future
   // multi-company admins drop in without a schema change.
-  companyMemberships     CompanyMembership[]
+  companyMemberships CompanyMembership[]
+
+  // Customer-facing referral program (Phase A+ #1, 2026-06-16).
+  // Each paying family gets a unique referralCode they share with
+  // friends. The friend redeems at signup; once their subscription
+  // flips to ACTIVE, the referrer accrues account credit that gets
+  // applied against their next renewal cycle. Payout-shape defaults
+  // to account credit (no Stripe Connect KYC overhead); a future
+  // swap to Connect transfers only touches the redemption pathway.
+  referralCode           String?    @unique
+  referralCreditCentavos Int        @default(0)
+  referralsMade          Referral[] @relation("Referrer")
+  referralReceived       Referral?  @relation("Referred")
+
+  // Sensu Family App MVP — call-center shift toggle (Juan 2026-08-04).
+  // Only meaningful when role = CALLCENTER. When false, the push
+  // dispatcher suppresses standard-tier alerts for this operator
+  // (battery, geofence, offline). Critical-tier alerts (sos, fall)
+  // always deliver regardless of shift; safety-first override lives
+  // in the dispatcher, not on the schema. Defaults to true so a
+  // newly-seeded call-center account starts receiving alerts without
+  // an admin having to flip a switch.
+  onShift Boolean @default(true)
+
+  // Sensu Family App MVP — Step 8. Client posts the current
+  // Notification.permission state on every mount so the server can
+  // count pushes that landed on a browser that had already blocked
+  // us. The escalation modal fires when permission is `denied`, the
+  // last permission ping is 7+ days old, and at least one push was
+  // dispatched during that window.
+  notificationPermission          String    @default("default")
+  notificationPermissionUpdatedAt DateTime?
+  missedPushesCount               Int       @default(0)
+  lastMissedPushAt                DateTime?
 
   @@index([email])
   @@index([username])
@@ -295,6 +357,8 @@ model User {
   @@index([signupSource])
   @@index([lastOperatorPingAt])
   @@index([kind])
+  @@index([referralCode])
+  @@index([role, onShift])
 }
 
 // ============================================
@@ -385,13 +449,47 @@ model ContactInquiry {
 // original request body so the row stays meaningful even after the
 // target is deleted.
 
+// ============================================
+// CUSTOMER REFERRALS (Phase A+ #1, 2026-06-16)
+// ============================================
+//
+// One Referral row per friend-of-customer who signed up via a
+// referral code. The row stays PENDING until the friend's
+// Subscription flips to ACTIVE; at that moment we move to REDEEMED
+// and bump the referrer's referralCreditCentavos. The credit gets
+// applied against the referrer's next renewal cycle by the worker's
+// drip-tick or invoice webhook (TBD by Juan's call on payout shape).
+
+enum ReferralStatus {
+  PENDING // friend signed up but hasn't paid
+  REDEEMED // friend paid, credit accrued to referrer
+  EXPIRED // 90 days elapsed without payment
+}
+
+model Referral {
+  id               String         @id @default(cuid())
+  referrerUserId   String
+  referrer         User           @relation("Referrer", fields: [referrerUserId], references: [id], onDelete: Cascade)
+  referredUserId   String         @unique
+  referred         User           @relation("Referred", fields: [referredUserId], references: [id], onDelete: Cascade)
+  referralCodeUsed String // snapshot of the code the friend used at signup
+  status           ReferralStatus @default(PENDING)
+  creditCentavos   Int            @default(50000) // $500 MXN default per redeem
+  subscriptionId   String? // ACTIVE subscription that triggered REDEEMED
+  createdAt        DateTime       @default(now())
+  redeemedAt       DateTime? // set when status → REDEEMED
+
+  @@index([referrerUserId, status])
+  @@index([status, createdAt])
+}
+
 model AdminAuditLog {
   id          String   @id @default(cuid())
-  actorUserId String?  // null when the actor is the system (cron, webhook)
-  actorEmail  String?  // captured at write-time so a deleted User row still reads
-  action      String   // e.g. "company.create"
-  targetType  String?  // e.g. "Company"
-  targetId    String?  // e.g. the Company id
+  actorUserId String? // null when the actor is the system (cron, webhook)
+  actorEmail  String? // captured at write-time so a deleted User row still reads
+  action      String // e.g. "company.create"
+  targetType  String? // e.g. "Company"
+  targetId    String? // e.g. the Company id
   metadata    Json?
   createdAt   DateTime @default(now())
 
@@ -406,24 +504,24 @@ model AdminAuditLog {
 // ============================================
 
 model Company {
-  id           String              @id @default(cuid())
-  name         String              @unique
+  id             String   @id @default(cuid())
+  name           String   @unique
   // HR / Safety contact at the company. Used by the call-center when
   // a worker's device fires SOS and the operator needs to escalate
   // through the company chain before reaching family or 911.
-  contactName  String?
-  contactEmail String?
-  contactPhone String?
-  notes        String?
-  isActive     Boolean             @default(true)
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  notes          String?
+  isActive       Boolean  @default(true)
   // Industrial-fleet rail (Phase C #1 reshape, Juan 2026-06-10). When
   // true: workers are MANAGED_WORKER User rows with synthetic emails
   // and no login; the HR lead owns one shared CompanyEmergencyContact
   // roster covering every device. Default false keeps the existing
   // SaaS rail intact for non-industrial deals.
-  isManagedFleet Boolean           @default(false)
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  isManagedFleet Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   memberships       CompanyMembership[]
   invoices          CompanyInvoice[]
@@ -456,7 +554,7 @@ model CompanyEmergencyContact {
 }
 
 model CompanyInvoice {
-  id               String                @id @default(cuid())
+  id               String               @id @default(cuid())
   companyId        String
   // Free-text label so the admin can tag an invoice with the period
   // it covers ("Mayo 2026" / "Q3 2026" / "Servicio anual 2026") or
@@ -466,7 +564,7 @@ model CompanyInvoice {
   // the company owes. Net + IVA breakdown is derived at display time
   // so we never store the rounded display values.
   grossCentavos    Int
-  status           CompanyInvoiceStatus  @default(DRAFT)
+  status           CompanyInvoiceStatus @default(DRAFT)
   dueAt            DateTime?
   sentAt           DateTime?
   paidAt           DateTime?
@@ -474,10 +572,10 @@ model CompanyInvoice {
   // number, SPEI tracking) the admin pastes after collecting.
   paymentReference String?
   notes            String?
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
-  company          Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, createdAt])
   @@index([status, dueAt])
@@ -495,8 +593,8 @@ model CompanyMembership {
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 
-  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // One user, one membership per company (no duplicate rows). A future
   // multi-company user would create multiple rows here.
@@ -510,17 +608,17 @@ model CompanyMembership {
 // ============================================
 
 model EmergencyContact {
-  id           String   @id @default(cuid())
+  id           String  @id @default(cuid())
   fullName     String
   phone        String
   relationship String?
-  priority     Int      @default(0) // For ordering contacts
+  priority     Int     @default(0) // For ordering contacts
 
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
@@ -530,8 +628,8 @@ model EmergencyContact {
 // ============================================
 
 model Plan {
-  id                       String         @id @default(cuid())
-  type                     PlanType       @unique
+  id                       String   @id @default(cuid())
+  type                     PlanType @unique
   name                     String
   description              String
   installmentPrice         Int?
@@ -542,31 +640,31 @@ model Plan {
   stripePriceIdMonitoring  String
   stripePriceIdOneTime     String?
   stripeProductId          String
-  isPopular                Boolean        @default(false)
-  isActive                 Boolean        @default(true)
+  isPopular                Boolean  @default(false)
+  isActive                 Boolean  @default(true)
 
   // 2026-05-26 pricing pivot (Juan).
   // One-time upfront fee charged at signup, separate from the recurring
   // subscription — covers the pendant + cellular activation (e.g.
   // $2,000 device + $122 activation = $2,122 net, $2,461.52 with IVA).
-  initialFeeCents          Int?
-  stripePriceIdInitialFee  String?
+  initialFeeCents         Int?
+  stripePriceIdInitialFee String?
   // Recurring subscription prices, one per cadence, stored as net
   // centavos (display layer adds IVA). Stripe price IDs are looked up
   // by cadence at checkout-session creation time. All three are
   // nullable so a plan can opt out of a cadence (e.g. Total may only
   // offer monthly + annual).
-  priceMonthlyCents        Int?
-  priceSemestralCents      Int?
-  priceAnnualCents         Int?
-  stripePriceIdMonthly     String?
-  stripePriceIdSemestral   String?
-  stripePriceIdAnnual      String?
+  priceMonthlyCents       Int?
+  priceSemestralCents     Int?
+  priceAnnualCents        Int?
+  stripePriceIdMonthly    String?
+  stripePriceIdSemestral  String?
+  stripePriceIdAnnual     String?
 
-  subscriptions            Subscription[]
+  subscriptions Subscription[]
 
-  createdAt                DateTime       @default(now())
-  updatedAt                DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Subscription {
@@ -584,45 +682,45 @@ model Subscription {
   endDate               DateTime?
 
   // Purchase type tracking
-  purchaseType          PurchaseType       @default(ONE_TIME)
+  purchaseType PurchaseType @default(ONE_TIME)
 
   // MSI (Meses sin intereses) tracking
-  installmentMonths     Int?               // null = no MSI, 3/6/9/12/18/24 = MSI months
+  installmentMonths Int? // null = no MSI, 3/6/9/12/18/24 = MSI months
 
   // Renewal tracking
-  purchaseDate          DateTime?          // When payment was completed
-  amountPaidCentavos    Int?               // Total amount paid
+  purchaseDate       DateTime? // When payment was completed
+  amountPaidCentavos Int? // Total amount paid
 
   // 2026-05-26 pricing pivot: every recurring subscription carries a
   // chosen cadence. The renewal cycle = purchaseDate + 1 cadence step
   // (1, 6, or 12 months). currentPeriodEnd is the next renewal date,
   // set when Stripe confirms the payment and rolled forward on each
   // successful renewal webhook.
-  cadence               BillingCadence?
-  currentPeriodEnd      DateTime?
-  initialFeePaidCentavos Int?              // One-time upfront amount
+  cadence                BillingCadence?
+  currentPeriodEnd       DateTime?
+  initialFeePaidCentavos Int? // One-time upfront amount
 
   // Split payment tracking
-  paymentMode           PaymentMode        @default(FULL)
-  splitPayerCount       Int?               // null for FULL, 2 or 3 for SPLIT
-  splitPayments         SplitPayment[]
+  paymentMode     PaymentMode    @default(FULL)
+  splitPayerCount Int? // null for FULL, 2 or 3 for SPLIT
+  splitPayments   SplitPayment[]
 
   // Shipment workflow (Juan 2026-05-19). Call-center stamps shippedAt
   // when they hand the Angela to the courier; activatedAt when they
   // pair the IMEI to the user. Each transition fires its email.
-  shippedAt             DateTime?
-  shippedBy             String?            // admin email/id who marked it
-  activatedAt           DateTime?
-  activatedBy           String?
-  activatedDeviceId     String?            // eviewDeviceId paired at activation
+  shippedAt         DateTime?
+  shippedBy         String? // admin email/id who marked it
+  activatedAt       DateTime?
+  activatedBy       String?
+  activatedDeviceId String? // eviewDeviceId paired at activation
 
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Scheduled-email log (drip campaign). Back-relation on the join model
   // so we can both `tx.dripEmailLog.create({...})` and read "what did we
   // already send for this subscription" without a second query.
-  dripEmails            DripEmailLog[]
+  dripEmails DripEmailLog[]
 
   // Partner promo redemption — when the buyer arrived via /pemex or any
   // future partner channel that carries a PromoCode. The discount amount
@@ -630,13 +728,72 @@ model Subscription {
   // reconciliation never have to re-derive it from current rate-cards
   // (which can change post-redemption).
   promoCodeId            String?
-  promoCode              PromoCode?         @relation(fields: [promoCodeId], references: [code])
+  promoCode              PromoCode? @relation(fields: [promoCodeId], references: [code])
   discountAmountCentavos Int?
+
+  // Renewal worker tracking (Juan 2026-06-18). Three columns drive the
+  // automated renewal loop: a reminder email goes out 7 days before
+  // `currentPeriodEnd`, a charge attempt fires on `currentPeriodEnd`
+  // itself, and the row flips to PAST_DUE after enough failed attempts
+  // (with `pastDueGraceEndsAt` marking the auto-CANCEL date).
+  //
+  // - `renewalReminderSentAt` — when the 7-day pre-renewal email
+  //   landed. Idempotent: the renewal-tick checks this column to
+  //   avoid double-sending. Reset to null on every successful charge
+  //   so the next cycle's reminder fires.
+  // - `renewalAttemptCount` — incremented on each failed charge.
+  //   Stripe declines, network errors, expired cards all bump it.
+  //   Reset to 0 on a successful charge.
+  // - `pastDueGraceEndsAt` — set when the row transitions to PAST_DUE.
+  //   After this date the next tick promotes PAST_DUE → CANCELLED and
+  //   sends the final cancellation email.
+  renewalReminderSentAt DateTime?
+  renewalAttemptCount   Int       @default(0)
+  pastDueGraceEndsAt    DateTime?
+
+  // Sales-rep attribution (Juan 2026-07-30 direct-sales pivot). Set at
+  // checkout-start when the buyer arrives with ?rep=<slug> or when an
+  // admin manually assigns a rep in the admin panel. NULL for organic /
+  // unattributed subs (legacy pre-pivot signups + admin-created subs
+  // that predate rep configuration).
+  attributionRepId  String?
+  attributionRep    SalesRep? @relation(fields: [attributionRepId], references: [id])
+  attributionSource String? // "url_param" / "admin_manual" / "referral"
 
   @@index([userId])
   @@index([status])
   @@index([purchaseType])
   @@index([promoCodeId])
+  @@index([attributionRepId])
+  // Renewal tick scans on (status, currentPeriodEnd); without an
+  // index this would seq-scan the whole Subscription table every
+  // hour. status alone is too coarse — we want ACTIVE rows whose
+  // currentPeriodEnd is in a narrow window.
+  @@index([status, currentPeriodEnd])
+}
+
+// Sales representatives for the direct-sales channel (Juan 2026-07-30
+// pivot to Guillermo's rep team). Each rep gets a stable slug used in
+// checkout URLs (?rep=guillermo) so attribution is captured at signup
+// without the buyer having to enter anything. `commissionBps` is the
+// per-sale commission in basis points (2000 = 20%). Deactivating a
+// rep sets `active = false` so their slug stops attributing new sales
+// but historical attributions on Subscription rows are preserved.
+model SalesRep {
+  id            String   @id @default(cuid())
+  slug          String   @unique // URL-friendly, lowercase, [a-z0-9-]
+  name          String
+  email         String   @unique
+  phone         String?
+  commissionBps Int      @default(2000) // basis points (2000 = 20%)
+  active        Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([active])
 }
 
 // Partner promo codes. Each row is a single negotiated deal — Pemex
@@ -649,16 +806,16 @@ model Subscription {
 // relation off Subscription gives the admin /admin/promos surface a
 // one-query roll-up of count + revenue per code.
 model PromoCode {
-  code              String         @id
-  label             String                                    // human readable: "Pemex aliado · 10% anual"
-  percentOffBps     Int                                        // basis points (1000 = 10%)
-  applyToInitialFee Boolean        @default(false)             // false = recurring only; true = covers initial fee + shipping too
-  cadenceLock       BillingCadence?                            // null = any cadence; set = force this cadence
+  code              String          @id
+  label             String // human readable: "Pemex aliado · 10% anual"
+  percentOffBps     Int // basis points (1000 = 10%)
+  applyToInitialFee Boolean         @default(false) // false = recurring only; true = covers initial fee + shipping too
+  cadenceLock       BillingCadence? // null = any cadence; set = force this cadence
   validFrom         DateTime?
   validUntil        DateTime?
-  maxRedemptions    Int?                                       // null = unlimited
-  channel           String                                     // tagging — "pemex", "referral-q3", etc.
-  createdAt         DateTime       @default(now())
+  maxRedemptions    Int? // null = unlimited
+  channel           String // tagging — "pemex", "referral-q3", etc.
+  createdAt         DateTime        @default(now())
   redemptions       Subscription[]
 
   @@index([channel])
@@ -674,7 +831,10 @@ model PromoCode {
 // composite unique index.
 enum DripEmailKind {
   ABANDONED_CART
+  POST_PURCHASE_DAY3
   POST_PURCHASE_DAY7
+  POST_PURCHASE_DAY30
+  DEVICE_INACTIVE_7D
 }
 
 model DripEmailLog {
@@ -689,23 +849,23 @@ model DripEmailLog {
 }
 
 model SplitPayment {
-  id                    String              @id @default(cuid())
+  id                    String             @id @default(cuid())
   subscriptionId        String
-  subscription          Subscription        @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  payerIndex            Int                 // 0 = subscriber, 1 = second payer, 2 = third payer
+  subscription          Subscription       @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  payerIndex            Int // 0 = subscriber, 1 = second payer, 2 = third payer
   payerName             String
   payerEmail            String?
   amountCentavos        Int
-  stripePaymentIntentId String?             @unique
-  status                SplitPaymentStatus  @default(PENDING)
+  stripePaymentIntentId String?            @unique
+  status                SplitPaymentStatus @default(PENDING)
   installmentMonths     Int?
   paidAt                DateTime?
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
+  @@unique([subscriptionId, payerIndex])
   @@index([subscriptionId])
   @@index([status])
-  @@unique([subscriptionId, payerIndex])
 }
 
 // ============================================
@@ -713,49 +873,49 @@ model SplitPayment {
 // ============================================
 
 model Device {
-  id                   String      @id @default(cuid())
-  deviceId             String      @unique // Eview device ID
-  deviceType           DeviceType  @default(PENDANT)
-  productId            String?     // Product SKU/identifier
-  deviceName           String?     // Friendly name from device
+  id          String     @id @default(cuid())
+  deviceId    String     @unique // Eview device ID
+  deviceType  DeviceType @default(PENDANT)
+  productId   String? // Product SKU/identifier
+  deviceName  String? // Friendly name from device
   // The pendant's SIM phone number — operators dial this to call the
   // senior back through the device speaker. Captured by the call-center
   // at activation time (Juan 2026-05-22).
-  phoneNumber          String?
+  phoneNumber String?
 
   // Settings (from device_settings table)
-  fallDetectionEnabled Boolean     @default(true)
-  fallSensitivity      Int         @default(5)  // 1-10 scale
-  batteryThreshold     Int         @default(20) // percentage alert
-  fallDialEnabled      Boolean     @default(true)
+  fallDetectionEnabled Boolean @default(true)
+  fallSensitivity      Int     @default(5) // 1-10 scale
+  batteryThreshold     Int     @default(20) // percentage alert
+  fallDialEnabled      Boolean @default(true)
 
-  isActive             Boolean     @default(true)
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  userDevices          UserDevice[]
-  eviewEvents          EviewEvent[]
-  geofences            Geofence[]
-  familyInvites        FamilyInvite[]
+  userDevices   UserDevice[]
+  eviewEvents   EviewEvent[]
+  geofences     Geofence[]
+  familyInvites FamilyInvite[]
 
   @@index([deviceId])
 }
 
 model UserDevice {
-  id              String     @id @default(cuid())
-  userId          String
-  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  eviewDeviceId   String     // Eview device ID string (e.g., "EV123456")
-  device          Device     @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
-  label           String?    // Custom name like "Botón de Abuela"
-  isPrimary       Boolean    @default(false)
+  id            String     @id @default(cuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eviewDeviceId String // Eview device ID string (e.g., "EV123456")
+  device        Device     @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
+  label         String? // Custom name like "Botón de Abuela"
+  isPrimary     Boolean    @default(false)
   // Master vs Watcher (per Juan, 2026-05-15): the original buyer is the
   // Master User — they paid, completed the questionnaire, and admin
   // every Watcher tied to the same device. Watchers join by email
   // invite or by IMEI + Client-ID + share-password and see the same
   // dashboard but cannot revoke other Watchers or themselves.
-  role            DeviceRole @default(MASTER)
+  role          DeviceRole @default(MASTER)
 
   assignedAt DateTime @default(now())
 
@@ -782,18 +942,18 @@ enum DeviceRole {
 // used months later.
 
 model FamilyInvite {
-  id                String    @id @default(cuid())
-  code              String    @unique
-  masterUserId      String
-  masterUser        User      @relation("FamilyInviteMaster", fields: [masterUserId], references: [id], onDelete: Cascade)
-  eviewDeviceId     String
-  device            Device    @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
-  email             String?   // optional — Master can mint a link without an email target
-  expiresAt         DateTime
-  consumedAt        DateTime?
-  consumedByUserId  String?
-  consumedByUser    User?     @relation("FamilyInviteConsumer", fields: [consumedByUserId], references: [id], onDelete: SetNull)
-  createdAt         DateTime  @default(now())
+  id               String    @id @default(cuid())
+  code             String    @unique
+  masterUserId     String
+  masterUser       User      @relation("FamilyInviteMaster", fields: [masterUserId], references: [id], onDelete: Cascade)
+  eviewDeviceId    String
+  device           Device    @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
+  email            String? // optional — Master can mint a link without an email target
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  consumedByUserId String?
+  consumedByUser   User?     @relation("FamilyInviteConsumer", fields: [consumedByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now())
 
   @@index([masterUserId])
   @@index([eviewDeviceId])
@@ -805,13 +965,13 @@ model FamilyInvite {
 // ============================================
 
 model Geofence {
-  id                    String            @id @default(cuid())
-  userId                String
-  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  eviewDeviceId         String            // Eview device ID string
-  device                Device            @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
+  id            String @id @default(cuid())
+  userId        String
+  user          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eviewDeviceId String // Eview device ID string
+  device        Device @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
 
-  zoneNumber            Int               // 1-4 per device
+  zoneNumber            Int // 1-4 per device
   name                  String
   centerLat             Float
   centerLng             Float
@@ -822,8 +982,8 @@ model Geofence {
   syncedToDevice        Boolean           @default(false)
   lastSyncedAt          DateTime?
 
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([eviewDeviceId, zoneNumber])
   @@index([userId])
@@ -835,39 +995,39 @@ model Geofence {
 // ============================================
 
 model EviewEvent {
-  id              String   @id @default(cuid())
-  eviewDeviceId   String   // Eview device ID string
-  device          Device   @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
-  eventType       String   // "button_press", "location", "heartbeat", "fall", "geofence"
-  timestamp       DateTime
+  id            String   @id @default(cuid())
+  eviewDeviceId String // Eview device ID string
+  device        Device   @relation(fields: [eviewDeviceId], references: [deviceId], onDelete: Cascade)
+  eventType     String // "button_press", "location", "heartbeat", "fall", "geofence"
+  timestamp     DateTime
 
   // Device info
-  deviceName      String?
+  deviceName String?
 
   // Telemetry
-  batteryLevel    Int?
-  lat             Float?
-  lng             Float?
-  accuracyMeters  Float?
-  isGps           Boolean  @default(false)
-  isWifi          Boolean  @default(false)
-  isGsm           Boolean  @default(false)
-  isMotion        Boolean  @default(false)
-  isCharging      Boolean  @default(false)
-  workMode        Int?
-  signalStrength  Int?
+  batteryLevel   Int?
+  lat            Float?
+  lng            Float?
+  accuracyMeters Float?
+  isGps          Boolean @default(false)
+  isWifi         Boolean @default(false)
+  isGsm          Boolean @default(false)
+  isMotion       Boolean @default(false)
+  isCharging     Boolean @default(false)
+  workMode       Int?
+  signalStrength Int?
 
   // Button/Alarm info
-  buttonType      String?  // "SOS Button", "Side Call Button 1", "Side Call Button 2"
+  buttonType      String? // "SOS Button", "Side Call Button 1", "Side Call Button 2"
   statusCode      Int?
   statusCode2     Int?
   alarmCode       Int?
   alarmCodeExtend Int?
 
   // Raw data
-  rawPayload      Json?
-  processedAt     DateTime @default(now())
-  createdAt       DateTime @default(now())
+  rawPayload  Json?
+  processedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   // Per-user read state for the alert history feed (Step 8).
   alertReads      AlertRead[]
@@ -890,14 +1050,14 @@ model EviewEvent {
 // the kind enum is the structured backbone.
 
 model OperatorAction {
-  id             String              @id @default(cuid())
+  id             String             @id @default(cuid())
   eviewEventId   String
-  eviewEvent     EviewEvent          @relation(fields: [eviewEventId], references: [id], onDelete: Cascade)
+  eviewEvent     EviewEvent         @relation(fields: [eviewEventId], references: [id], onDelete: Cascade)
   operatorUserId String
-  operator       User                @relation(fields: [operatorUserId], references: [id], onDelete: Cascade)
+  operator       User               @relation(fields: [operatorUserId], references: [id], onDelete: Cascade)
   kind           OperatorActionKind
   note           String?
-  createdAt      DateTime            @default(now())
+  createdAt      DateTime           @default(now())
 
   @@index([eviewEventId, createdAt])
   @@index([operatorUserId])
@@ -908,6 +1068,9 @@ enum OperatorActionKind {
   CALLED_EMERGENCY_CONTACT
   CALLED_FAMILY
   PHONED_AURA
+  CALLED_911
+  DISPATCHED_AMBULANCE
+  FALSE_ALARM
   NOTED
   RESOLVED
 }
@@ -928,6 +1091,10 @@ model AlertRead {
   eviewEventId String
   eviewEvent   EviewEvent @relation(fields: [eviewEventId], references: [id], onDelete: Cascade)
   readAt       DateTime   @default(now())
+  // Non-null when the ack came from tapping "Ya vi" on a native push
+  // notification (Step 6). Analytics-only: lets us track how often the
+  // notification surface resolved the alert vs. an in-app tap.
+  dismissedFromNotificationAt DateTime?
 
   @@unique([userId, eviewEventId])
   @@index([userId])
@@ -1009,7 +1176,7 @@ model SupportArticle {
   id        String   @id @default(cuid())
   slug      String   @unique
   title     String
-  body      String                       // markdown — rendered server-side as plain paragraphs
+  body      String // markdown — rendered server-side as plain paragraphs
   videoUrl  String?
   imageUrl  String?
   iconKey   String   @default("book-open") // lucide name (without "lu" prefix)
@@ -1027,30 +1194,34 @@ model SupportArticle {
 // admin has deleted. Add a row when the seed endpoint plants
 // something; check for an existing row before re-planting.
 model SeedMark {
-  key       String   @id
-  seededAt  DateTime @default(now())
+  key      String   @id
+  seededAt DateTime @default(now())
 }
 
 model WorkerParityCheck {
-  id                 String   @id @default(cuid())
-  source             String   // 'TS' | 'PYTHON' — which subscriber observed the event
-  eviewDeviceId      String
-  eventType          String
-  timestamp          DateTime
-  statusCode         Int?
-  alarmCode          Int?
-  batteryLevel       Int?
-  lat                Float?
-  lng                Float?
+  id                String   @id @default(cuid())
+  source            String // 'TS' | 'PYTHON' — which subscriber observed the event
+  eviewDeviceId     String
+  eventType         String
+  timestamp         DateTime
+  statusCode        Int?
+  alarmCode         Int?
+  batteryLevel      Int?
+  lat               Float?
+  lng               Float?
   /// Foreign-id pointer to the EviewEvent row this observation references.
   /// Null when the worker tried to save but the row was deduped or the
   /// save failed; non-null entries are the parity ground truth.
-  eviewEventId       String?
-  divergent          Boolean  @default(false)
-  divergenceDetails  Json?
-  observedAt         DateTime @default(now())
+  eviewEventId      String?
+  divergent         Boolean  @default(false)
+  divergenceDetails Json?
+  observedAt        DateTime @default(now())
 
   @@index([eviewDeviceId, eventType, timestamp])
   @@index([source])
   @@index([divergent])
+  // /admin/parity filters by `observedAt >= phaseAWindowStart`; without
+  // this single-column index Postgres did a sequential scan across all
+  // 150k+ parity rows on every page load.
+  @@index([observedAt])
 }

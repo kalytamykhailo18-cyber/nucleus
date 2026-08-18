@@ -28,6 +28,14 @@ export interface AlertSummary {
   lat: number | null;
   lng: number | null;
   read: boolean;
+  /**
+   * ISO timestamp of the earliest OperatorAction the call-center
+   * recorded against this alert (audit gap 6 remainder, 2026-08-11).
+   * Non-null means the operator has picked up the alert; the family
+   * row renders a small "Atendido" pill so the family can tell
+   * whether the professional side is already engaged.
+   */
+  operatorRespondedAt: string | null;
 }
 
 export interface AlertsPage {
@@ -132,14 +140,30 @@ export async function fetchAlertsForUser(
 
   if (page.length === 0) return { alerts: [], nextCursor: null };
 
-  const reads = await prisma.alertRead.findMany({
-    where: {
-      userId,
-      eviewEventId: { in: page.map((e) => e.id) },
-    },
-    select: { eviewEventId: true },
-  });
+  const eventIds = page.map((e) => e.id);
+  const [reads, operatorActions] = await Promise.all([
+    prisma.alertRead.findMany({
+      where: { userId, eviewEventId: { in: eventIds } },
+      select: { eviewEventId: true },
+    }),
+    // Earliest OperatorAction per event — anchors the "Atendido"
+    // pill to the moment the call-center first touched the alert,
+    // not the most recent action. Any action counts (NOTED,
+    // CALLED_SENIOR, PHONED_AURA, RESOLVED, etc.) — the family only
+    // needs to know that a professional is engaged.
+    prisma.operatorAction.findMany({
+      where: { eviewEventId: { in: eventIds } },
+      select: { eviewEventId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
   const readSet = new Set(reads.map((r) => r.eviewEventId));
+  const operatorFirstAtByEvent = new Map<string, Date>();
+  for (const action of operatorActions) {
+    if (!operatorFirstAtByEvent.has(action.eviewEventId)) {
+      operatorFirstAtByEvent.set(action.eviewEventId, action.createdAt);
+    }
+  }
 
   const alerts = page.map((e) => ({
     id: e.id,
@@ -152,6 +176,8 @@ export async function fetchAlertsForUser(
     lat: e.lat,
     lng: e.lng,
     read: readSet.has(e.id),
+    operatorRespondedAt:
+      operatorFirstAtByEvent.get(e.id)?.toISOString() ?? null,
   }));
 
   const nextCursor = hasMore ? alerts[alerts.length - 1]!.timestamp : null;

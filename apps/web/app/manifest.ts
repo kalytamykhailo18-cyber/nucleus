@@ -17,7 +17,7 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: 'Sensu',
     description:
       'Sensu Angela — botón SOS, GPS y centro de asistencia humano 24/7 para tu familiar.',
-    start_url: '/dashboard',
+    start_url: '/app',
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',

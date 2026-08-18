@@ -1,15 +1,20 @@
+import Link from 'next/link';
 import {
   LuActivity,
   LuArrowDown,
   LuArrowUp,
   LuBuilding2,
   LuChartLine,
+  LuFilter,
+  LuFilterX,
+  LuGift,
   LuRadar,
   LuUsers,
 } from 'react-icons/lu';
 import { SectionLabel } from '@/components/section-label';
 import { requireAdmin } from '@/lib/admin';
 import { fetchReportingSnapshot } from '@/lib/admin-reporting';
+import { resolveStrictAdminView } from '@/lib/admin-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,9 +46,20 @@ function formatPercent(n: number): string {
  * call (Stripe is the source of truth for cash, this page is the
  * cohort + lifecycle lens).
  */
-export default async function AdminReportingPage(): Promise<React.ReactElement> {
-  await requireAdmin();
-  const snap = await fetchReportingSnapshot();
+export default async function AdminReportingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ vista?: string }>;
+}): Promise<React.ReactElement> {
+  const admin = await requireAdmin();
+  const params = await searchParams;
+  // Juan 2026-06-23 follow-up: strict is the DEFAULT — see
+  // resolveStrictAdminView. Playwright sessions get the opt-out
+  // cookie so the spec suite still sees the seeded-demo aggregates.
+  const strictView = await resolveStrictAdminView(params.vista);
+  const snap = await fetchReportingSnapshot({
+    callcenterMode: admin.callcenterMode || strictView,
+  });
 
   const signupsDelta = snap.signups30d - snap.signups60dPrior;
   const signupsDeltaPct = snap.signups60dPrior
@@ -59,9 +75,34 @@ export default async function AdminReportingPage(): Promise<React.ReactElement> 
         <SectionLabel icon={LuChartLine} tone="sensu">
           Administración · Reportes
         </SectionLabel>
-        <h1 className="mt-2 text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-900">
-          Reporte ejecutivo
-        </h1>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-900">
+            Reporte ejecutivo
+          </h1>
+          <Link
+            href={
+              strictView ? '/admin/reporting?vista=all' : '/admin/reporting'
+            }
+            data-testid="admin-reporting-real-toggle"
+            className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-transform hover:-translate-y-0.5 active:scale-[0.98] ${
+              strictView
+                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+                : 'bg-white text-zinc-700 ring-1 ring-inset ring-zinc-200 hover:bg-zinc-50'
+            }`}
+          >
+            {strictView ? (
+              <>
+                <LuFilterX aria-hidden className="h-4 w-4" />
+                Mostrar datos de prueba
+              </>
+            ) : (
+              <>
+                <LuFilter aria-hidden className="h-4 w-4" />
+                Solo clientes reales
+              </>
+            )}
+          </Link>
+        </div>
         <p className="mt-3 text-base text-zinc-500">
           Foto del negocio al{' '}
           {new Date(snap.generatedAt).toLocaleString('es-MX', {
@@ -219,6 +260,84 @@ export default async function AdminReportingPage(): Promise<React.ReactElement> 
                   <span className="text-sm text-zinc-800">{row.planName}</span>
                   <span className="text-sm font-medium tabular-nums text-zinc-900">
                     {row.count.toLocaleString('es-MX')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* Referral program */}
+        <section
+          data-testid="admin-reporting-referrals-card"
+          className="card-surface mt-6 rounded-3xl p-6"
+        >
+          <h2 className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
+            <LuGift aria-hidden className="h-3.5 w-3.5 text-sensu-500" />
+            Programa de referidos
+          </h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <Stat
+              label="Nuevos referidos (30 días)"
+              value={snap.referrals.created30d.toLocaleString('es-MX')}
+              tone="sky"
+              testId="admin-reporting-stat-referrals-30d"
+            />
+            <Stat
+              label="Pendientes"
+              value={snap.referrals.statusCounts.pending.toLocaleString('es-MX')}
+              tone="amber"
+              testId="admin-reporting-stat-referrals-pending"
+            />
+            <Stat
+              label="Canjeados"
+              value={snap.referrals.statusCounts.redeemed.toLocaleString('es-MX')}
+              tone="emerald"
+              testId="admin-reporting-stat-referrals-redeemed"
+            />
+            <Stat
+              label="Crédito acumulado"
+              value={formatPesos(snap.referrals.creditAccruedCentavos)}
+              tone="sensu"
+              testId="admin-reporting-stat-referrals-credit"
+            />
+          </div>
+          {snap.referrals.statusCounts.expired > 0 && (
+            <p
+              data-testid="admin-reporting-referrals-expired"
+              className="mt-3 text-xs text-zinc-500"
+            >
+              {snap.referrals.statusCounts.expired.toLocaleString('es-MX')}{' '}
+              referidos vencieron sin pago (más de 90 días).
+            </p>
+          )}
+          <h3 className="mt-6 text-xs uppercase tracking-[0.14em] text-zinc-500">
+            Top referidores
+          </h3>
+          {snap.referrals.topReferrers.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">
+              Sin canjes registrados todavía.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {snap.referrals.topReferrers.map((row) => (
+                <li
+                  key={row.userId}
+                  data-testid={`admin-reporting-top-referrer-${row.userId}`}
+                  className="flex items-center justify-between rounded-2xl bg-zinc-50 px-4 py-2 ring-1 ring-zinc-200/70"
+                >
+                  <span className="min-w-0 truncate text-sm text-zinc-800">
+                    {row.fullName ?? row.email}
+                    <span className="ml-2 text-xs text-zinc-500">{row.email}</span>
+                  </span>
+                  <span className="ml-3 flex shrink-0 items-center gap-3 text-sm font-medium tabular-nums text-zinc-900">
+                    <span>
+                      {row.redeemedCount.toLocaleString('es-MX')}
+                      <span className="ml-1 text-xs text-zinc-500">canjes</span>
+                    </span>
+                    <span className="text-sensu-700">
+                      {formatPesos(row.creditCentavos)}
+                    </span>
                   </span>
                 </li>
               ))}

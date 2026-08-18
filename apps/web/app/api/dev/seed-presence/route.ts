@@ -96,6 +96,45 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     },
     update: {},
   });
+  // The operator board suppresses "Sin titular asignado" rows (Juan
+  // 2026-06-19) by requiring EXISTS a MASTER UserDevice on the
+  // eviewDeviceId, so the seeded SOS needs a paired MASTER user.
+  // Pair to a dedicated synthetic fixture, NOT the real admin —
+  // otherwise the admin's /dashboard accumulates a presence-device row
+  // and the userId-filter spec sees 2 devices instead of 1.
+  const fixtureEmail = 'presence-fixture@nucleus-test.local';
+  const fixture = await prisma.user.upsert({
+    where: { email: fixtureEmail },
+    create: {
+      email: fixtureEmail,
+      fullName: 'Presence Fixture',
+      role: 'USER',
+      isActive: false,
+    },
+    update: {},
+    select: { id: true },
+  });
+  const existingPairing = await prisma.userDevice.findFirst({
+    where: { eviewDeviceId: deviceId, role: 'MASTER' },
+    select: { id: true, userId: true },
+  });
+  if (!existingPairing) {
+    await prisma.userDevice.create({
+      data: {
+        userId: fixture.id,
+        eviewDeviceId: deviceId,
+        role: 'MASTER',
+        isPrimary: true,
+      },
+    });
+  } else if (existingPairing.userId === admin.id) {
+    // Heal any legacy pairing that landed on the admin and now leaks
+    // into the admin's /dashboard list.
+    await prisma.userDevice.update({
+      where: { id: existingPairing.id },
+      data: { userId: fixture.id },
+    });
+  }
 
   // New event + claiming action. Fresh row per call so the latest
   // OperatorAction is always this PHONED_AURA — load counts it.

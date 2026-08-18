@@ -55,14 +55,35 @@ function formatLastSeen(iso: string | null): string {
   });
 }
 
-function popupHtml(d: FleetDeviceWithFix): string {
+function popupHtml(
+  d: FleetDeviceWithFix,
+  popupBehavior: 'admin' | 'maps',
+): string {
   const senior = d.masterName ?? '<em>Sin titular asignado</em>';
   const label = d.deviceName ?? d.deviceId;
   const battery =
     d.batteryLevel !== null ? `${d.batteryLevel}% batería` : 'Sin batería';
   const lastSeen = formatLastSeen(d.lastSeenAt);
-  // Operator board click-through: /admin/operator opens the priority
-  // queue — the dispatcher locates the device by row from there.
+  // Two flavors:
+  //   admin → click-through to /admin/devices/[imei] + /admin/operator
+  //           for the dispatcher workflow.
+  //   maps  → click-through to Google Maps at the pin's coordinates
+  //           for the company-side HR lead (Juan 2026-06-23 — D.1a).
+  const actions =
+    popupBehavior === 'maps'
+      ? `
+        <a data-testid="fleet-popup-maps" href="https://www.google.com/maps?q=${d.lat},${d.lng}" target="_blank" rel="noreferrer noopener" style="display:inline-block;padding:4px 10px;background:#059669;color:#fff;border-radius:9999px;text-decoration:none;font-size:11px;font-weight:500">
+          Abrir en Google Maps
+        </a>
+      `
+      : `
+        <a data-testid="fleet-popup-timeline" href="/admin/devices/${encodeURIComponent(d.deviceId)}" style="display:inline-block;padding:4px 10px;background:#e11d48;color:#fff;border-radius:9999px;text-decoration:none;font-size:11px;font-weight:500">
+          Línea de tiempo
+        </a>
+        <a data-testid="fleet-popup-operator" href="/admin/operator" style="display:inline-block;padding:4px 10px;background:#0284c7;color:#fff;border-radius:9999px;text-decoration:none;font-size:11px;font-weight:500">
+          Abrir cola del operador
+        </a>
+      `;
   return `
     <div style="font-family:-apple-system,Inter,sans-serif;min-width:200px">
       <div style="font-weight:600;color:#18181b;font-size:13px;line-height:1.2">${escapeHtml(label)}</div>
@@ -73,12 +94,7 @@ function popupHtml(d: FleetDeviceWithFix): string {
         <span style="font-family:ui-monospace,Menlo,monospace;font-size:10px">${escapeHtml(d.deviceId)}</span>
       </div>
       <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-        <a data-testid="fleet-popup-timeline" href="/admin/devices/${encodeURIComponent(d.deviceId)}" style="display:inline-block;padding:4px 10px;background:#e11d48;color:#fff;border-radius:9999px;text-decoration:none;font-size:11px;font-weight:500">
-          Línea de tiempo
-        </a>
-        <a data-testid="fleet-popup-operator" href="/admin/operator" style="display:inline-block;padding:4px 10px;background:#0284c7;color:#fff;border-radius:9999px;text-decoration:none;font-size:11px;font-weight:500">
-          Abrir cola del operador
-        </a>
+        ${actions}
       </div>
     </div>
   `;
@@ -94,8 +110,14 @@ function escapeHtml(s: string): string {
 
 export function FleetMapClient({
   devices,
+  popupBehavior = 'admin',
 }: {
   devices: FleetDevice[];
+  /** Juan 2026-06-23 (D.1a). 'admin' opens /admin/devices + /admin/operator
+   *  in the popup; 'maps' opens Google Maps at the pin's coordinates.
+   *  Company-side surfaces pass 'maps' so HR leads land somewhere they
+   *  have access to instead of an admin-only page. */
+  popupBehavior?: 'admin' | 'maps';
 }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
@@ -145,7 +167,7 @@ export function FleetMapClient({
           popupAnchor: [0, -32],
         }),
       });
-      marker.bindPopup(popupHtml(d), { maxWidth: 280 });
+      marker.bindPopup(popupHtml(d, popupBehavior), { maxWidth: 280 });
       marker.addTo(map);
       // Element-level testid so a spec can deterministically click a
       // known device's pin without depending on z-order.

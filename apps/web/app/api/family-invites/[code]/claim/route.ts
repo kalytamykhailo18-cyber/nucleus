@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { requireFamilyApiAuth } from '@/lib/admin';
 import { consumeFamilyInvite } from '@/lib/family-invite';
 
 export const dynamic = 'force-dynamic';
@@ -8,13 +8,10 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ code: string }> },
 ): Promise<NextResponse> {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const gate = await requireFamilyApiAuth();
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
   const { code } = await params;
-  const result = await consumeFamilyInvite(code, userId);
+  const result = await consumeFamilyInvite(code, gate.userId);
   if (result.ok) {
     return NextResponse.json({ ok: true, deviceId: result.deviceId });
   }

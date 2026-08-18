@@ -19,6 +19,43 @@ export interface SendEmailInput {
   html?: string;
 }
 
+/**
+ * Recipient suffixes / addresses that NEVER receive a real Resend
+ * delivery, even when RESEND_API_KEY is live. These are spec fixtures
+ * (Playwright-only accounts) plus the seeded demo / admin Sensu
+ * accounts that the test suite repeatedly triggers (Watcher claims,
+ * activation flows, etc.). The EmailOutboxTest row still gets
+ * written, so specs can verify content via /api/dev/last-email.
+ *
+ * Without this guard, a single Playwright run firing the family-claim
+ * spec dozens of times sent Ustym dozens of "Nuevo familiar en tu
+ * Angela" emails to his real Gmail — burned Resend quota and risked
+ * domain reputation. Juan 2026-06-17.
+ */
+const SUPPRESS_REAL_DELIVERY_SUFFIXES = [
+  '@nucleus-test.local',
+  '@e2e-pair.local',
+  '@managed.sensu.internal',
+] as const;
+
+function isSuppressedRecipient(to: string): boolean {
+  const lower = to.toLowerCase();
+  if (SUPPRESS_REAL_DELIVERY_SUFFIXES.some((s) => lower.endsWith(s))) {
+    return true;
+  }
+  // Real Sensu inboxes that forward to humans (Ustym, Juan). The seed
+  // script attaches them as Master / Watcher / admin on the demo
+  // fixtures, so every spec-driven Watcher claim and every spec login
+  // triggers a notification that lands in a real inbox. Block at the
+  // transport so neither Resend quota nor inbox noise grows on test
+  // traffic.
+  const demoEmail = env.NUCLEUS_DEMO_EMAIL?.toLowerCase();
+  const adminEmail = env.NUCLEUS_ADMIN_EMAIL?.toLowerCase();
+  if (demoEmail && lower === demoEmail) return true;
+  if (adminEmail && lower === adminEmail) return true;
+  return false;
+}
+
 export async function sendEmail({
   to,
   subject,
@@ -28,8 +65,13 @@ export async function sendEmail({
   const apiKey = env.RESEND_API_KEY;
   const mode = env.RESEND_MODE;
   const e2eHooks = env.E2E_HOOKS_SECRET !== undefined;
+  const suppressed = isSuppressedRecipient(to);
 
-  if (apiKey && mode === 'live') {
+  if (suppressed) {
+    console.info(
+      `[email] (suppressed — fixture/seed recipient) to=${to} subject=${subject}`,
+    );
+  } else if (apiKey && mode === 'live') {
     try {
       const res = await fetch(constants.RESEND_API_URL, {
         method: 'POST',
@@ -39,6 +81,12 @@ export async function sendEmail({
         },
         body: JSON.stringify({
           from: env.RESEND_FROM,
+          // Route replies to the monitored support inbox — the visible
+          // From address stays `noreply@sensu.com.mx` (deliberate signal
+          // that automated emails come from a bot), but every "responde
+          // este correo" instruction in body copy now actually lands
+          // somewhere a human reads. Juan 2026-07-30.
+          reply_to: env.NEXT_PUBLIC_SUPPORT_EMAIL,
           to: [to],
           subject,
           text,

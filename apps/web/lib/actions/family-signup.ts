@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { hashPassword } from '@/lib/password';
 import { normalizeEmail } from '@/lib/email';
+import { strictImeiSchema } from '@/lib/imei-validation';
 
 /**
  * "Soy familiar de un usuario Sensu" signup — per Juan 2026-05-15.
@@ -36,12 +37,7 @@ const familySignupSchema = z.object({
     .max(255)
     .optional()
     .nullable(),
-  imei: z
-    .string()
-    .trim()
-    .min(8, 'IMEI debe tener entre 8 y 20 caracteres')
-    .max(20)
-    .regex(/^[A-Za-z0-9-]+$/, 'IMEI sólo admite letras, números y guiones'),
+  imei: strictImeiSchema,
   masterClientId: z
     .string()
     .trim()

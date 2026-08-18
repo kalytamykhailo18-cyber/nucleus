@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/db';
-import { EXCLUDED_DEVICE_PREFIXES } from '@/lib/admin-exclusions';
+import { devicePrefixesFor } from '@/lib/admin-exclusions';
 
 /**
  * Fleet-wide live map data (Phase B, Juan 2026-05-25 Q1).
@@ -33,17 +33,19 @@ export interface FleetDevice {
   batteryLevel: number | null;
 }
 
-export async function fetchFleetDevices(): Promise<FleetDevice[]> {
-  // Active pendants only. EXCLUDED_DEVICE_PREFIXES drops every
-  // synthetic / fixture id from the human-facing map: worker-spec
-  // STEP6* / E2E- noise, the lowercase e2e- variants, and the seeded
-  // demo / geocrud / nogps pendants from the demo fixture. The list
-  // is shared with the operator board so the two surfaces never
-  // disagree on what counts as a "real" device.
-  const devices = await prisma.device.findMany({
+export async function fetchFleetDevices(
+  options: { callcenterMode?: boolean } = {},
+): Promise<FleetDevice[]> {
+  // Active pendants only. `devicePrefixesFor(callcenterMode)` returns
+  // the right exclusion list: lenient = drop only test noise (STEP6,
+  // E2E-, e2e-); strict = also drop the entire EV-* synthetic family
+  // (EV-DEMO, EV-CLAIM, EV-CLAIMREL, EV-GEOCRUD, EV-NOGPS, etc.) so
+  // Juan + the call-center see only real numeric IMEIs.
+  const excludedPrefixes = devicePrefixesFor(options.callcenterMode ?? false);
+  const raw = await prisma.device.findMany({
     where: {
       isActive: true,
-      AND: EXCLUDED_DEVICE_PREFIXES.map((prefix) => ({
+      AND: excludedPrefixes.map((prefix) => ({
         deviceId: { not: { startsWith: prefix } },
       })),
     },
@@ -53,6 +55,13 @@ export async function fetchFleetDevices(): Promise<FleetDevice[]> {
       createdAt: true,
     },
   });
+  // Juan 2026-06-23: drop all-same-digit placeholder IMEIs (`1111...`,
+  // `0000...`) that survived the prefix filter. Real Eview IMEIs never
+  // repeat a single digit for 15 places; the placeholder rows polluted
+  // the dispatcher's inventory list.
+  const devices = options.callcenterMode
+    ? raw.filter((d) => !/^(\d)\1{6,}$/.test(d.deviceId))
+    : raw;
 
   if (devices.length === 0) return [];
 
@@ -73,47 +82,81 @@ export async function fetchFleetDevices(): Promise<FleetDevice[]> {
     masterByDevice.set(m.eviewDeviceId, m.user.fullName);
   }
 
-  // Per-device telemetry. Three small queries per device is fine for
-  // fleet sizes up to a few hundred; revisit with a window function /
-  // raw SQL if the fleet crosses ~1k.
-  return Promise.all(
-    devices.map(async (d) => {
-      const [latestEvent, latestBattery, latestFix] = await Promise.all([
-        prisma.eviewEvent.findFirst({
-          where: { eviewDeviceId: d.deviceId },
-          orderBy: { timestamp: 'desc' },
-          select: { timestamp: true, batteryLevel: true },
-        }),
-        prisma.eviewEvent.findFirst({
-          where: {
-            eviewDeviceId: d.deviceId,
-            batteryLevel: { not: null },
-          },
-          orderBy: { timestamp: 'desc' },
-          select: { batteryLevel: true },
-        }),
-        prisma.eviewEvent.findFirst({
-          where: {
-            eviewDeviceId: d.deviceId,
-            lat: { not: null },
-            lng: { not: null },
-          },
-          orderBy: { timestamp: 'desc' },
-          select: { lat: true, lng: true },
-        }),
-      ]);
+  // Per-device telemetry — bulk Postgres `DISTINCT ON` instead of one
+  // findFirst loop per device. The fleet hit 616 active devices, and
+  // the prior code ran 3 EviewEvent queries each (1,848 round-trips per
+  // page load). Three single DISTINCT ON queries replace that, each one
+  // pinning the `EviewEvent_eviewDeviceId_timestamp_idx` index for an
+  // ordered scan.
+  type LatestRow = {
+    eviewDeviceId: string;
+    timestamp: Date;
+    batteryLevel: number | null;
+  };
+  type LatestBatteryRow = {
+    eviewDeviceId: string;
+    batteryLevel: number;
+  };
+  type LatestFixRow = {
+    eviewDeviceId: string;
+    lat: number;
+    lng: number;
+  };
+  const [latestEventRows, latestBatteryRows, latestFixRows] = await Promise.all([
+    prisma.$queryRaw<LatestRow[]>`
+      SELECT DISTINCT ON ("eviewDeviceId")
+        "eviewDeviceId",
+        "timestamp",
+        "batteryLevel"
+      FROM "EviewEvent"
+      WHERE "eviewDeviceId" = ANY (${deviceIds}::text[])
+      ORDER BY "eviewDeviceId", "timestamp" DESC
+    `,
+    prisma.$queryRaw<LatestBatteryRow[]>`
+      SELECT DISTINCT ON ("eviewDeviceId")
+        "eviewDeviceId",
+        "batteryLevel"
+      FROM "EviewEvent"
+      WHERE "eviewDeviceId" = ANY (${deviceIds}::text[])
+        AND "batteryLevel" IS NOT NULL
+      ORDER BY "eviewDeviceId", "timestamp" DESC
+    `,
+    prisma.$queryRaw<LatestFixRow[]>`
+      SELECT DISTINCT ON ("eviewDeviceId")
+        "eviewDeviceId",
+        "lat",
+        "lng"
+      FROM "EviewEvent"
+      WHERE "eviewDeviceId" = ANY (${deviceIds}::text[])
+        AND "lat" IS NOT NULL
+        AND "lng" IS NOT NULL
+      ORDER BY "eviewDeviceId", "timestamp" DESC
+    `,
+  ]);
 
-      return {
-        deviceId: d.deviceId,
-        deviceName: d.deviceName,
-        masterName: masterByDevice.get(d.deviceId) ?? null,
-        createdAt: d.createdAt.toISOString(),
-        lat: latestFix?.lat ?? null,
-        lng: latestFix?.lng ?? null,
-        lastSeenAt: latestEvent?.timestamp.toISOString() ?? null,
-        batteryLevel:
-          latestEvent?.batteryLevel ?? latestBattery?.batteryLevel ?? null,
-      } satisfies FleetDevice;
-    }),
+  const latestEventByDevice = new Map(
+    latestEventRows.map((r) => [r.eviewDeviceId, r]),
   );
+  const latestBatteryByDevice = new Map(
+    latestBatteryRows.map((r) => [r.eviewDeviceId, r.batteryLevel]),
+  );
+  const latestFixByDevice = new Map(
+    latestFixRows.map((r) => [r.eviewDeviceId, { lat: r.lat, lng: r.lng }]),
+  );
+
+  return devices.map((d) => {
+    const latestEvent = latestEventByDevice.get(d.deviceId);
+    const fix = latestFixByDevice.get(d.deviceId) ?? null;
+    return {
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+      masterName: masterByDevice.get(d.deviceId) ?? null,
+      createdAt: d.createdAt.toISOString(),
+      lat: fix?.lat ?? null,
+      lng: fix?.lng ?? null,
+      lastSeenAt: latestEvent?.timestamp.toISOString() ?? null,
+      batteryLevel:
+        latestEvent?.batteryLevel ?? latestBatteryByDevice.get(d.deviceId) ?? null,
+    } satisfies FleetDevice;
+  });
 }

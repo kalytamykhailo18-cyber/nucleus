@@ -43,6 +43,21 @@ export interface CareRecipientView {
   checkInTimeOfDay: string | null;
 }
 
+/**
+ * Industrial-fleet context for the operator-board modal. Present
+ * only when the matched device's MASTER is a MANAGED_WORKER routed
+ * to a Company with isManagedFleet=true. The presence of this field
+ * tells the dispatcher: do NOT call this worker's "family" — the
+ * emergencyContacts array contains the company's shared roster, not
+ * personal contacts.
+ */
+export interface ManagedFleetContext {
+  companyName: string;
+  workerFullName: string | null;
+  employeeId: string | null;
+  jobTitle: string | null;
+}
+
 export interface CallCenterLookup {
   matchedBy: 'deviceId' | 'phone';
   devices: Array<{
@@ -59,6 +74,7 @@ export interface CallCenterLookup {
   careRecipient: CareRecipientView | null;
   watchers: RosterContact[];
   emergencyContacts: RosterContact[];
+  managedFleet: ManagedFleetContext | null;
 }
 
 function normalizePhone(raw: string): string {
@@ -103,8 +119,11 @@ async function buildLookupForMaster(
         orderBy: { createdAt: 'asc' },
         take: 1,
         select: {
+          employeeId: true,
+          jobTitle: true,
           company: {
             select: {
+              name: true,
               isManagedFleet: true,
               emergencyContacts: {
                 orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
@@ -135,6 +154,7 @@ async function buildLookupForMaster(
       careRecipient: null,
       watchers: [],
       emergencyContacts: [],
+      managedFleet: null,
     };
   }
 
@@ -186,6 +206,30 @@ async function buildLookupForMaster(
       email: w.user.email,
     })),
     emergencyContacts: resolveEmergencyContacts(master),
+    managedFleet: resolveManagedFleetContext(master),
+  };
+}
+
+function resolveManagedFleetContext(master: {
+  kind: string;
+  fullName: string | null;
+  companyMemberships: Array<{
+    employeeId: string | null;
+    jobTitle: string | null;
+    company: {
+      name: string;
+      isManagedFleet: boolean;
+    };
+  }>;
+}): ManagedFleetContext | null {
+  if (master.kind !== 'MANAGED_WORKER') return null;
+  const membership = master.companyMemberships[0];
+  if (!membership || !membership.company.isManagedFleet) return null;
+  return {
+    companyName: membership.company.name,
+    workerFullName: master.fullName,
+    employeeId: membership.employeeId,
+    jobTitle: membership.jobTitle,
   };
 }
 

@@ -32,8 +32,15 @@ import { stripe } from '@/lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
-const LOOKBACK_HOURS = 24;
-const CANCEL_CAP = 500;
+// Juan 2026-06-25: tightened from 24h → 6h after his "534 Incompleto
+// rows" ask. Six hours gives a buyer who closed the tab for lunch
+// enough room to come back via the checkout-resume flow, but stops
+// the dispatcher's Pagos view from collecting a week-long backlog of
+// dead intents from my own deploy-verification traffic.
+const LOOKBACK_HOURS = 6;
+// Same tighten — was 500. 1000 lets one tick eat the whole 534-row
+// backlog Juan flagged today plus headroom for next day's traffic.
+const CANCEL_CAP = 1000;
 const PAGE_SIZE = 100;
 const CANCELABLE_STATUSES = new Set<Stripe.PaymentIntent.Status>([
   'requires_payment_method',

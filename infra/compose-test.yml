@@ -1,0 +1,101 @@
+# Isolated test stack used by `scripts/redeploy.sh` to run the full
+# Playwright suite WITHOUT touching prod. Identical to /opt/sensu/
+# docker-compose.yml in shape so a green test stack run is a reliable
+# predictor of prod behavior, with three deliberate isolations:
+#
+#   1. Separate Postgres on tmpfs — fresh empty DB every run, no
+#      contamination of the live `sensu_pay` database, no leaked
+#      test rows showing up in /admin/registrations.
+#   2. Different container names, host ports 13xxx, and project name
+#      `sensu-test` so `docker compose up` against prod cannot
+#      collide on names, networks, or volumes.
+#   3. RESEND_MODE=dev forced inside the test web container so even
+#      if a brand-new code path slips past the email-transport
+#      suppression, no Resend API call leaves the machine. Outbox
+#      rows still get written for specs that assert content.
+#
+# Same images the prod compose runs — tagged `:test` here, retagged
+# `:local` only after the suite goes green. Until that retag, prod
+# stays on whatever image is already deployed.
+services:
+  postgres-test:
+    image: postgres:18-alpine
+    container_name: sensu-postgres-test
+    environment:
+      POSTGRES_USER: sensu
+      POSTGRES_PASSWORD: testpw
+      POSTGRES_DB: sensu_pay_test
+      # postgres:18 ships with a new on-disk layout that lives under
+      # /var/lib/postgresql/<major>/docker. The image refuses to use
+      # an existing `/var/lib/postgresql/data` mount (legacy 17-) as
+      # PGDATA — initialization aborts with a `pg_ctlcluster` warning.
+      # We pin PGDATA to the 18+ path and tmpfs THAT directory so the
+      # test stack starts cleanly every run.
+      PGDATA: /var/lib/postgresql/18/docker
+    # Host port deliberately offset to 13432 so `prisma db push` from
+    # the host doesn't fight the prod 5432 listener and so a future
+    # parallel test run can pick 14432, 15432, etc.
+    ports:
+      - "127.0.0.1:13432:5432"
+    # tmpfs: each test run starts with an empty database, no need to
+    # reset between runs. Restart wipes everything.
+    tmpfs:
+      - /var/lib/postgresql/18/docker
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sensu -d sensu_pay_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  nucleus-web-test:
+    image: nucleus-web:test
+    container_name: nucleus-web-test
+    mem_limit: 800m
+    memswap_limit: 1500m
+    # Reuse the repo .env so every secret the prod web has is also
+    # available here (Stripe TEST keys, HubSpot, JWT, etc.). The
+    # environment: block below stomps the few keys that MUST differ:
+    # DB pointer, app URL, Resend mode (dev = outbox only).
+    env_file:
+      - /home/ssm-user/project/nucleus/.env
+    environment:
+      # Override the four keys that MUST differ from prod. Everything
+      # else (Stripe TEST keys, HubSpot, JWT, VAPID, NUCLEUS_DEMO_*,
+      # E2E_HOOKS_SECRET) inherits from .env via env_file so the host
+      # seed script and the in-container hook secret match without
+      # any `${VAR}` interpolation that sudo would strip.
+      DATABASE_URL: postgresql://sensu:testpw@postgres-test:5432/sensu_pay_test
+      AUTH_URL: http://localhost:13001
+      NEXTAUTH_URL: http://localhost:13001
+      RESEND_MODE: dev
+    ports:
+      - "127.0.0.1:13001:3000"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 2s
+      timeout: 3s
+      start_period: 8s
+      retries: 30
+
+  nucleus-worker-test:
+    image: nucleus-worker:test
+    container_name: nucleus-worker-test
+    mem_limit: 384m
+    memswap_limit: 768m
+    env_file:
+      - /home/ssm-user/project/nucleus/.env
+    environment:
+      DATABASE_URL: postgresql://sensu:testpw@postgres-test:5432/sensu_pay_test
+      # MQTT auto-start off in test — the worker still boots, exposes
+      # the same handlers, but doesn't connect to LocTube. Step 6 spec
+      # spawns its own local mosquitto when needed.
+      EVIEW_MQTT_AUTO_START: "false"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      nucleus-web-test:
+        condition: service_healthy

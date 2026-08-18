@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { env } from '@/lib/env';
+import { bustParityCache } from '@/lib/parity';
 
 /**
  * Test seam + production hook: write a parity observation tagged
@@ -69,6 +70,13 @@ export async function POST(request: NextRequest) {
     },
     select: { id: true },
   });
+
+  // Invalidate the 5-minute parity-summary memo so a follow-up GET on
+  // /api/admin/parity reflects the new row immediately instead of
+  // waiting out the TTL. Only required here because this route + the
+  // page render share one process; the worker-side parity writes run
+  // in a separate container and accept the cache lag.
+  bustParityCache();
 
   return NextResponse.json({ ok: true, id: created.id });
 }

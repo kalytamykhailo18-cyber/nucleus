@@ -18,6 +18,10 @@ import {
   LuBuilding2,
   LuMessageCircle,
   LuChartLine,
+  LuCalendarCheck,
+  LuClock,
+  LuGift,
+  LuTrendingUp,
 } from 'react-icons/lu';
 import { auth } from '@/auth';
 import { getLatestSubscriptionState } from '@/lib/subscription-state';
@@ -46,9 +50,12 @@ import { MobileNavDrawer, type MobileNavItem } from './mobile-nav-drawer';
 export async function AppHeader() {
   const session = await auth();
   const isAuthed = !!session?.user;
-  const isAdmin =
-    isAuthed &&
-    (session.user as { role?: 'USER' | 'ADMIN' }).role === 'ADMIN';
+  const sessionRole =
+    (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' | 'SALES' } | undefined)
+      ?.role ?? 'USER';
+  const isAdmin = isAuthed && sessionRole === 'ADMIN';
+  const isCallcenter = isAuthed && sessionRole === 'CALLCENTER';
+  const isSales = isAuthed && sessionRole === 'SALES';
   const userId = isAuthed
     ? (session.user as { id?: string }).id ?? null
     : null;
@@ -103,7 +110,51 @@ export async function AppHeader() {
   // `subItems` to the /soporte row so the drawer can expand sections.
   type Blueprint = HeaderMenuItem & { subItems?: typeof audienceSubItems };
   const blueprint: Blueprint[] = [];
-  if (isAuthed) {
+  if (isSales) {
+    // WhatsApp assisted-sales rep menu (Juan 2026-06-22) — single
+    // surface for the rep. No family-side links, no admin business
+    // surfaces, no call-center queue. Everything else bounces back
+    // to /admin/assisted-sales at the page level.
+    blueprint.push({
+      href: '/admin/assisted-sales',
+      label: 'Venta asistida',
+      testId: 'admin-assisted-sales',
+      group: 'admin',
+      iconNode: <LuRadio aria-hidden className="h-4 w-4 text-sensu-500" />,
+    });
+  } else if (isCallcenter) {
+    // Call-center dispatcher menu — narrow to the three surfaces they
+    // operate on plus the Cerrar sesión footer (added by HeaderMenu /
+    // MobileNavDrawer via `showLogout`). No family-side links, no
+    // admin business surfaces (dispatch / companies / reporting /
+    // audit / parity / marketing). Trying to reach those routes
+    // bounces them back to /admin/operator at the page level.
+    blueprint.push(
+      {
+        href: '/admin/operator',
+        label: 'Operador',
+        testId: 'admin-operator',
+        group: 'admin',
+        iconNode: <LuRadio aria-hidden className="h-4 w-4 text-rose-500" />,
+      },
+      {
+        href: '/admin/check-ins',
+        label: 'Check-ins',
+        testId: 'admin-check-ins',
+        group: 'admin',
+        iconNode: (
+          <LuCalendarCheck aria-hidden className="h-4 w-4 text-emerald-500" />
+        ),
+      },
+      {
+        href: '/admin/fleet',
+        label: 'Mapa de la flota',
+        testId: 'admin-fleet',
+        group: 'admin',
+        iconNode: <LuMap aria-hidden className="h-4 w-4 text-emerald-500" />,
+      },
+    );
+  } else if (isAuthed) {
     if (isPendingPayment) {
       blueprint.push({
         href: '/checkout',
@@ -148,6 +199,12 @@ export async function AppHeader() {
         iconNode: <LuUser aria-hidden className="h-4 w-4 text-violet-500" />,
       },
       {
+        href: '/profile/referrals',
+        label: 'Referidos',
+        testId: 'referrals',
+        iconNode: <LuGift aria-hidden className="h-4 w-4 text-sensu-500" />,
+      },
+      {
         href: '/como-funciona',
         label: '¿Cómo funciona?',
         testId: 'como-funciona',
@@ -178,6 +235,24 @@ export async function AppHeader() {
     if (isAdmin) {
       blueprint.push(
         {
+          href: '/admin/business',
+          label: 'Negocio',
+          testId: 'admin-business',
+          group: 'admin',
+          iconNode: (
+            <LuTrendingUp aria-hidden className="h-4 w-4 text-sensu-500" />
+          ),
+        },
+        {
+          href: '/admin/sales-reps',
+          label: 'Vendedores',
+          testId: 'admin-sales-reps',
+          group: 'admin',
+          iconNode: (
+            <LuUsers aria-hidden className="h-4 w-4 text-emerald-500" />
+          ),
+        },
+        {
           href: '/admin/registrations',
           label: 'Registros',
           testId: 'admin-registrations',
@@ -193,6 +268,15 @@ export async function AppHeader() {
           group: 'admin',
           iconNode: (
             <LuRadio aria-hidden className="h-4 w-4 text-rose-500" />
+          ),
+        },
+        {
+          href: '/admin/check-ins',
+          label: 'Check-ins',
+          testId: 'admin-check-ins',
+          group: 'admin',
+          iconNode: (
+            <LuCalendarCheck aria-hidden className="h-4 w-4 text-emerald-500" />
           ),
         },
         {
@@ -220,6 +304,24 @@ export async function AppHeader() {
           group: 'admin',
           iconNode: (
             <LuBuilding2 aria-hidden className="h-4 w-4 text-sky-500" />
+          ),
+        },
+        {
+          href: '/admin/assisted-sales',
+          label: 'Venta asistida',
+          testId: 'admin-assisted-sales',
+          group: 'admin',
+          iconNode: (
+            <LuRadio aria-hidden className="h-4 w-4 text-sensu-500" />
+          ),
+        },
+        {
+          href: '/admin/funnel',
+          label: 'Funnel',
+          testId: 'admin-funnel',
+          group: 'admin',
+          iconNode: (
+            <LuClock aria-hidden className="h-4 w-4 text-amber-500" />
           ),
         },
         {
@@ -323,8 +425,12 @@ export async function AppHeader() {
           iconNode: <LuUser aria-hidden className="h-4 w-4 text-zinc-500" />,
         },
         {
-          href: '/signup',
-          label: 'Crear cuenta',
+          // Juan 2026-06-22: replaced the old "Crear cuenta" entry
+          // point. Every new account now starts on /planes so the
+          // buyer hits the payment flow before a User row is minted.
+          // /signup itself bounces to /planes for legacy bookmarks.
+          href: '/planes',
+          label: 'Comprar',
           testId: 'signup',
           group: 'admin',
           iconNode: (
@@ -398,21 +504,24 @@ export async function AppHeader() {
           <Link
             // Brand-mark click destination is role-aware:
             //   - admin → `/` (inline landing CMS, per Ustym 2026-05-29)
+            //   - callcenter → `/admin/operator` (dispatcher hub)
             //   - company-admin (HR / Safety lead) → `/company`
             //   - family-account → `/dashboard`
             //   - visitor → `/`
             href={
               !isAuthed || isAdmin
                 ? '/'
-                : isCompanyAdmin
-                  ? '/company'
-                  : '/dashboard'
+                : isCallcenter
+                  ? '/admin/operator'
+                  : isCompanyAdmin
+                    ? '/company'
+                    : '/dashboard'
             }
             data-testid="header-brand"
             className="flex shrink-0 items-center gap-2 text-xs uppercase tracking-[0.18em] text-zinc-500 transition-colors hover:text-zinc-700"
           >
             <LuShield aria-hidden className="h-4 w-4 text-sensu-500" />
-            <span className="font-semibold text-zinc-700">Sensu</span>
+            <span className="font-semibold text-zinc-700">Sensu Angela</span>
             <span aria-hidden className="hidden text-zinc-300 sm:inline">
               ·
             </span>
@@ -485,16 +594,16 @@ export async function AppHeader() {
               <Link
                 href="/login"
                 data-testid="header-cta-login"
-                className="hidden h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-sm font-medium tracking-tight text-zinc-700 transition-colors hover:text-zinc-900 min-[960px]:inline-flex"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs font-medium tracking-tight text-zinc-700 transition-colors hover:text-zinc-900 min-[960px]:px-3 min-[960px]:text-sm"
               >
                 Iniciar sesión
               </Link>
               <Link
-                href="/signup"
+                href="/planes"
                 data-testid="header-cta-signup"
                 className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sensu-500 px-3.5 text-sm font-medium tracking-tight text-white transition-transform duration-200 ease-[cubic-bezier(.32,.72,0,1)] hover:-translate-y-0.5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sensu-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f5f7]"
               >
-                Crear cuenta
+                Comprar
                 <LuArrowRight aria-hidden className="h-4 w-4" />
               </Link>
             </>

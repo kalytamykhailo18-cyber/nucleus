@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { stripe } from '@/lib/stripe';
-import { fetchActivePlans, type PlanType } from '@/lib/plans';
+import { fetchActivePlans, isFreeShippingActive, type PlanType } from '@/lib/plans';
 import { CheckoutForm } from './checkout-form';
 import { env } from '@/lib/env';
 
@@ -36,10 +36,26 @@ export interface CheckoutPromo {
 export default async function CheckoutPage({
   searchParams,
 }: {
-  searchParams: Promise<{ plan?: string; promo?: string; cadence?: string; source?: string }>;
+  searchParams: Promise<{
+    plan?: string;
+    promo?: string;
+    cadence?: string;
+    source?: string;
+    option?: string;
+    rep?: string;
+  }>;
 }) {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+  const sessionRole =
+    (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' } | undefined)
+      ?.role ?? null;
+
+  // Dispatchers do not buy. Bounce CALLCENTER off /checkout straight
+  // to their hub before any Stripe / subscription work happens.
+  if (sessionRole === 'CALLCENTER') {
+    redirect('/admin/operator');
+  }
 
   // Mode 2 + 3: authed user. Look up their latest subscription and route
   // by status.
@@ -68,7 +84,7 @@ export default async function CheckoutPage({
     // admins land on `/` (CMS) and company-admins on `/company`.
     if (!latestSub || latestSub.status !== 'PENDING_PAYMENT') {
       const { resolveLandingPath } = await import('@/lib/post-login-destination');
-      const role = (session?.user as { role?: 'USER' | 'ADMIN' } | undefined)?.role ?? null;
+      const role = (session?.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' } | undefined)?.role ?? null;
       const landing = await resolveLandingPath({ userId, role });
       redirect(landing);
     }
@@ -134,7 +150,16 @@ export default async function CheckoutPage({
     promo: promoParam,
     cadence: cadenceParam,
     source: sourceParam,
+    option: optionParam,
+    rep: repParam,
   } = await searchParams;
+  // Juan 2026-07-31: /planes surfaces only the annual $9,996 plan and
+  // hides Plan A from the public funnel. The /checkout no-option
+  // behavior stays as-is (cadence card / Plan A) so backward-compat is
+  // preserved for anyone deep-linking without an explicit ?option=.
+  // Real public buyers arrive here with option=B set by the /planes CTA.
+  const pickerOption: 'A' | 'B' | null =
+    optionParam === 'A' || optionParam === 'B' ? optionParam : null;
   const plans = await fetchActivePlans();
 
   // Partner promo lookup. Only honored on fresh signups (no resumeData)
@@ -157,6 +182,33 @@ export default async function CheckoutPage({
         percentOffBps: row.percentOffBps,
         applyToInitialFee: row.applyToInitialFee,
         cadenceLock: (row.cadenceLock as CheckoutPromo['cadenceLock']) ?? null,
+      };
+    }
+  }
+  // Auto-attach the current holiday promo (Juan 2026-06-22) so the
+  // visible breakdown shows the discount line. /api/checkout/start
+  // already applies it server-side at PaymentIntent creation; this
+  // mirrors the same logic on the UI so the buyer sees the discount
+  // before they hit Pagar. Skipped on resume (the existing row's
+  // discount is already persisted) and when an explicit promo wins.
+  if (!promo && !resumeData) {
+    const now = new Date();
+    const holiday = await prisma.promoCode.findFirst({
+      where: {
+        channel: { startsWith: 'holiday-' },
+        validFrom: { lte: now },
+        validUntil: { gte: now },
+      },
+      orderBy: { percentOffBps: 'desc' },
+    });
+    if (holiday) {
+      promo = {
+        code: holiday.code,
+        label: holiday.label,
+        percentOffBps: holiday.percentOffBps,
+        applyToInitialFee: holiday.applyToInitialFee,
+        cadenceLock:
+          (holiday.cadenceLock as CheckoutPromo['cadenceLock']) ?? null,
       };
     }
   }
@@ -209,6 +261,16 @@ export default async function CheckoutPage({
           promo={promo}
           initialCadence={initialCadence}
           initialSource={sourceParam ?? null}
+          initialRepSlug={repParam ?? null}
+          pickerOption={pickerOption}
+          pricingSplit={
+            env.NUCLEUS_PRICING_SPLIT_ENABLED && pickerOption === 'A'
+          }
+          firstMonthDelayDays={env.ASSISTED_FIRST_MONTH_DELAY_DAYS}
+          freeShipping={isFreeShippingActive(
+            Date.now(),
+            env.NUCLEUS_FREE_SHIPPING_UNTIL_ISO,
+          )}
         />
       </div>
     </main>

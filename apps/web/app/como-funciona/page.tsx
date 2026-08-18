@@ -16,7 +16,7 @@ import { fetchLandingOverrides, pickImage, pickText } from '@/lib/landing';
 import { CardEditPencil } from '@/components/card-edit-pencil';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/image/upload/c_fill,g_auto,w_1200,h_630,q_auto,f_jpg/v1780582692/sensu/landing/angela-device.png';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu Angela — ¿Cómo funciona?',
@@ -119,7 +119,7 @@ export default async function ComoFuncionaPage(): Promise<React.ReactElement> {
       title: 'Rastrea. Protege. Mantente conectado.',
       body: 'Monitorea el estado del dispositivo, nivel de batería, conexión y ubicación en tiempo real. Todo desde una interfaz intuitiva con botón SOS integrado.',
       bullets: ['Estado del dispositivo y nivel de batería', 'Ubicación GPS en tiempo real', 'Botón SOS desde la app', 'Historial de conexiones'],
-      imageUrl: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574332/sensu/landing/app-screen-1.jpg',
+      imageUrl: '',
       imageAlt: 'App Sensu — pantalla de seguimiento',
     },
     {
@@ -127,7 +127,7 @@ export default async function ComoFuncionaPage(): Promise<React.ReactElement> {
       title: 'Geocercas inteligentes',
       body: 'Crea zonas seguras personalizadas en segundos. Recibe alertas automáticas cuando tu ser querido sale o entra a las áreas delimitadas.',
       bullets: ['Define nombre, radio y tipo de alerta', 'Alertas de salida, entrada o ambos', 'Configuración rápida e intuitiva'],
-      imageUrl: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574333/sensu/landing/app-screen-2.jpg',
+      imageUrl: '',
       imageAlt: 'App Sensu — geocercas inteligentes',
     },
     {
@@ -135,7 +135,7 @@ export default async function ComoFuncionaPage(): Promise<React.ReactElement> {
       title: 'Administra dispositivos y ajustes',
       body: 'Configura geocercas, alertas de batería y ajustes de seguridad. Sincroniza dispositivos y personaliza cada detalle de la protección.',
       bullets: ['Sincroniza múltiples dispositivos', 'Configura alertas de batería baja', 'Busca y localiza el dispositivo con sonido'],
-      imageUrl: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574333/sensu/landing/app-screen-3.jpg',
+      imageUrl: '',
       imageAlt: 'App Sensu — administración de dispositivos',
     },
     {
@@ -143,7 +143,7 @@ export default async function ComoFuncionaPage(): Promise<React.ReactElement> {
       title: 'Alertas instantáneas',
       body: 'Recibe notificaciones en tiempo real de SOS, geocercas, batería baja y más. Mantente informado de todo lo que sucede con el dispositivo.',
       bullets: ['Alertas de SOS, geocercas y batería', 'Historial completo de eventos', 'Notificaciones push en tiempo real'],
-      imageUrl: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780574334/sensu/landing/app-screen-4.jpg',
+      imageUrl: '',
       imageAlt: 'App Sensu — alertas instantáneas',
     },
   ];
@@ -154,7 +154,7 @@ export default async function ComoFuncionaPage(): Promise<React.ReactElement> {
   );
 
   const deviceImage = pickImage(overrides, 'como-funciona-device-image', {
-    url: 'https://res.cloudinary.com/dcfjvxt5h/image/upload/v1780582692/sensu/landing/angela-device.png',
+    url: '',
     alt: 'Dispositivo Angela',
   });
 

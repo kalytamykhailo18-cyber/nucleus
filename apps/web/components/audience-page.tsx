@@ -89,17 +89,32 @@ export async function AudiencePage({
         data-testid={`audience-${slug}-hero`}
         className="relative w-screen overflow-hidden bg-black"
       >
-        <video
-          src={videoUrl}
-          poster={posterUrl}
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-          aria-hidden
-          className="block h-screen w-full object-cover"
-        />
+        {videoUrl ? (
+          <video
+            src={videoUrl}
+            poster={posterUrl}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            aria-hidden
+            className="block h-screen w-full object-cover"
+          />
+        ) : (
+          // 2026-06-29: when no video URL is configured (the originals
+          // died with the Cloudinary cloud on 2026-06-26), fall back
+          // to the per-audience brand-illustration banner so the hero
+          // is never an empty black hole. Once Juan rehosts the real
+          // promo videos through the Edit pencil, this branch goes
+          // unused on its own.
+          <img
+            src={`/api/illustration/audience-${slug}-hero`}
+            alt=""
+            aria-hidden
+            className="block h-screen w-full object-cover"
+          />
+        )}
         {isAdmin && (
           <CardEditPencil
             slugBase={slug}

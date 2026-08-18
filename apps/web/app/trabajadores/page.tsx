@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AudiencePage } from '@/components/audience-page';
 
 const OG_IMAGE =
-  'https://res.cloudinary.com/dcfjvxt5h/video/upload/c_fill,g_auto,w_1200,h_630,so_0,f_jpg,q_auto/v1780582709/sensu/landing/trabajadores-promo.jpg';
+  'https://sensu.com.mx/opengraph-image';
 
 export const metadata: Metadata = {
   title: 'Sensu para empresas — Protege a tu equipo',
@@ -41,7 +41,7 @@ export default async function TrabajadoresPage(): Promise<React.ReactElement> {
         closing:
           'Porque proteger a tu equipo también es una decisión estratégica.',
         videoUrl:
-          'https://res.cloudinary.com/dcfjvxt5h/video/upload/v1780582709/sensu/landing/trabajadores-promo.mp4',
+          '',
       }}
     />
   );

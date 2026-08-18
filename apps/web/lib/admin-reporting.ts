@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db';
 import { ALERT_EVENT_TYPES } from '@/lib/alerts';
+import { userFilterFor, devicePrefixesFor } from '@/lib/admin-exclusions';
 
 /**
  * Admin reporting aggregator (Phase C #5, 2026-06-15).
@@ -39,14 +40,55 @@ export interface ReportingSnapshot {
   totalCompanies: number;
   managedFleetCompanies: number;
   contactInquiries30d: number;
+  referrals: {
+    /** Referral rows created in the last 30 days, irrespective of status. */
+    created30d: number;
+    /** Status counts across the full Referral table (all-time). */
+    statusCounts: {
+      pending: number;
+      redeemed: number;
+      expired: number;
+    };
+    /** Credit accrued across REDEEMED rows (all-time, cents). */
+    creditAccruedCentavos: number;
+    /**
+     * Top referrers by REDEEMED count, all-time. Capped at 10 rows
+     * so the panel stays digestible.
+     */
+    topReferrers: Array<{
+      userId: string;
+      email: string;
+      fullName: string | null;
+      redeemedCount: number;
+      creditCentavos: number;
+    }>;
+  };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
+export async function fetchReportingSnapshot(
+  options: { callcenterMode?: boolean } = {},
+): Promise<ReportingSnapshot> {
   const now = Date.now();
   const thirtyDaysAgo = new Date(now - 30 * DAY_MS);
   const sixtyDaysAgo = new Date(now - 60 * DAY_MS);
+
+  // Match the rest of the admin platform: lenient viewers (specs +
+  // demo@sensu.com.mx) see fixture-tainted counts; call-center /
+  // production admins (Juan 2026-06-17) see only real customer data.
+  const userWhere = userFilterFor(options.callcenterMode ?? false);
+  const subUserWhere = { user: userWhere };
+  // EviewEvent rows from synthetic device IDs are tagged by prefix.
+  // Build the exclusion list once and reuse for the alert count.
+  const excludedDevicePrefixes = devicePrefixesFor(
+    options.callcenterMode ?? false,
+  );
+  const deviceExclusionWhere = {
+    AND: excludedDevicePrefixes.map((prefix) => ({
+      eviewDeviceId: { not: { startsWith: prefix } },
+    })),
+  };
 
   const [
     activeSubs,
@@ -65,9 +107,12 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
     totalCompanies,
     managedFleetCompanies,
     contactInquiries30d,
+    referralsCreated30d,
+    referralStatusRows,
+    topReferrerRows,
   ] = await Promise.all([
     prisma.subscription.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...subUserWhere },
       select: {
         cadence: true,
         amountPaidCentavos: true,
@@ -75,11 +120,21 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
         plan: { select: { name: true } },
       },
     }),
-    prisma.subscription.count({ where: { status: 'PENDING_PAYMENT' } }),
-    prisma.subscription.count({ where: { status: 'PAST_DUE' } }),
-    prisma.subscription.count({ where: { status: 'CANCELLED' } }),
     prisma.subscription.count({
-      where: { status: 'CANCELLED', updatedAt: { gte: thirtyDaysAgo } },
+      where: { status: 'PENDING_PAYMENT', ...subUserWhere },
+    }),
+    prisma.subscription.count({
+      where: { status: 'PAST_DUE', ...subUserWhere },
+    }),
+    prisma.subscription.count({
+      where: { status: 'CANCELLED', ...subUserWhere },
+    }),
+    prisma.subscription.count({
+      where: {
+        status: 'CANCELLED',
+        updatedAt: { gte: thirtyDaysAgo },
+        ...subUserWhere,
+      },
     }),
     prisma.subscription.count({
       where: {
@@ -88,29 +143,35 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
           { startDate: { lte: thirtyDaysAgo } },
           { startDate: null, createdAt: { lte: thirtyDaysAgo } },
         ],
+        ...subUserWhere,
       },
     }),
-    prisma.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.user.count({
+      where: { createdAt: { gte: thirtyDaysAgo }, ...userWhere },
+    }),
     prisma.user.count({
       where: {
         createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
+        ...userWhere,
       },
     }),
     prisma.user.groupBy({
       by: ['signupSource'],
+      where: userWhere,
       _count: { _all: true },
       orderBy: { _count: { signupSource: 'desc' } },
       take: 20,
     }),
     prisma.subscription.groupBy({
       by: ['planId'],
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...subUserWhere },
       _count: { _all: true },
     }),
     prisma.eviewEvent.count({
       where: {
         timestamp: { gte: thirtyDaysAgo },
         eventType: { in: [...ALERT_EVENT_TYPES] },
+        ...deviceExclusionWhere,
       },
     }),
     prisma.operatorAction.groupBy({
@@ -118,10 +179,24 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
       where: { createdAt: { gte: thirtyDaysAgo } },
       _count: { _all: true },
     }),
-    prisma.user.count(),
+    prisma.user.count({ where: userWhere }),
     prisma.company.count(),
     prisma.company.count({ where: { isManagedFleet: true } }),
     prisma.contactInquiry.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.referral.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.referral.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+      _sum: { creditCentavos: true },
+    }),
+    prisma.referral.groupBy({
+      by: ['referrerUserId'],
+      where: { status: 'REDEEMED' },
+      _count: { _all: true },
+      _sum: { creditCentavos: true },
+      orderBy: { _count: { referrerUserId: 'desc' } },
+      take: 10,
+    }),
   ]);
 
   // MRR-equivalent: cadence-normalize ACTIVE subs to a monthly cost.
@@ -150,6 +225,43 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
       })
     : [];
   const planNameById = new Map(planNameRows.map((p) => [p.id, p.name]));
+
+  // Referral status counts + accrued credit. groupBy returns one row
+  // per status that actually appears, so we read off the array rather
+  // than assume the three keys are present.
+  let referralPending = 0;
+  let referralRedeemed = 0;
+  let referralExpired = 0;
+  let referralCreditAccruedCentavos = 0;
+  for (const row of referralStatusRows) {
+    const n = row._count._all;
+    if (row.status === 'PENDING') referralPending = n;
+    if (row.status === 'REDEEMED') {
+      referralRedeemed = n;
+      referralCreditAccruedCentavos = row._sum.creditCentavos ?? 0;
+    }
+    if (row.status === 'EXPIRED') referralExpired = n;
+  }
+  const topReferrerIds = topReferrerRows.map((r) => r.referrerUserId);
+  const topReferrerUsers = topReferrerIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: topReferrerIds } },
+        select: { id: true, email: true, fullName: true },
+      })
+    : [];
+  const topReferrerById = new Map(topReferrerUsers.map((u) => [u.id, u]));
+  const topReferrers = topReferrerRows
+    .map((r) => {
+      const u = topReferrerById.get(r.referrerUserId);
+      return {
+        userId: r.referrerUserId,
+        email: u?.email ?? '(unknown)',
+        fullName: u?.fullName ?? null,
+        redeemedCount: r._count._all,
+        creditCentavos: r._sum.creditCentavos ?? 0,
+      };
+    })
+    .sort((a, b) => b.redeemedCount - a.redeemedCount);
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -183,5 +295,15 @@ export async function fetchReportingSnapshot(): Promise<ReportingSnapshot> {
     totalCompanies,
     managedFleetCompanies,
     contactInquiries30d,
+    referrals: {
+      created30d: referralsCreated30d,
+      statusCounts: {
+        pending: referralPending,
+        redeemed: referralRedeemed,
+        expired: referralExpired,
+      },
+      creditAccruedCentavos: referralCreditAccruedCentavos,
+      topReferrers,
+    },
   };
 }

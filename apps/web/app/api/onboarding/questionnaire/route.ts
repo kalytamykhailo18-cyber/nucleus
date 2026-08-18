@@ -38,10 +38,20 @@ const schema = z
       message: 'Invalid date',
     }),
     gender: z.enum(['MUJER', 'HOMBRE', 'OTRO']),
+    // CURP became optional 2026-06-23 (Juan A.5 — questionnaire no
+    // longer asks for it). The validator still rejects malformed
+    // non-empty values so the field stays clean for any legacy code
+    // that prefills it (Aura affiliate flow), but the family-side
+    // submit no longer requires it.
     curp: z
       .string()
-      .transform((s) => s.trim().toUpperCase())
-      .refine((s) => CURP_REGEX.test(s), { message: 'CURP inválida' }),
+      .nullable()
+      .optional()
+      .transform((s) => (s ? s.trim().toUpperCase() : null))
+      .refine((s) => s === null || s === '' || CURP_REGEX.test(s), {
+        message: 'CURP inválida',
+      })
+      .transform((s) => (s ? s : null)),
     rfcHomoclave: z
       .string()
       .trim()
@@ -98,6 +108,15 @@ export async function POST(request: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
+  const sessionRole =
+    (session.user as { role?: 'USER' | 'ADMIN' | 'CALLCENTER' }).role ?? 'USER';
+  if (sessionRole === 'CALLCENTER') {
+    // Dispatchers have no questionnaire to fill — bounce hard.
+    return NextResponse.json(
+      { error: 'forbidden_callcenter_role' },
+      { status: 403 },
+    );
+  }
   const userId = session.user.id;
 
   let raw: unknown;
@@ -125,14 +144,12 @@ export async function POST(request: NextRequest) {
     (now.getTime() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25),
   );
 
-  // Defense-in-depth: after Zod the curp is guaranteed non-empty and
-  // regex-valid, but Juan reported a 2026-06-08 case (Pablo's test
-  // signup) where the DB row had curp NULL after a 'completed'
-  // questionnaire. The validation path here could not have produced
-  // that outcome on its own; we log every submission's curp shape so
-  // the next incident has enough trace to diagnose, and we throw
-  // before the prisma update if the invariant breaks for any reason.
-  if (!data.curp || data.curp.length !== 18) {
+  // Defense-in-depth around the CURP shape. The field went optional
+  // 2026-06-23 (Juan A.5), so a null/empty value is now legitimate
+  // and we let it through. We still reject a NON-empty value that
+  // somehow snuck past Zod with a non-18-char shape so the column
+  // never holds garbage.
+  if (data.curp !== null && data.curp.length !== 18) {
     console.error('[questionnaire] curp invariant broken after Zod', {
       userId,
       curpLength: data.curp?.length ?? null,
@@ -145,7 +162,7 @@ export async function POST(request: NextRequest) {
   }
   console.info('[questionnaire] submit ok', {
     userId,
-    curpLength: data.curp.length,
+    curpLength: data.curp?.length ?? 0,
     contacts: data.contacts.length,
   });
 

@@ -89,13 +89,27 @@ async function sendOne(
       });
       return;
     }
+    // Urgency knob (RFC 8030): FCM / APNs defer `normal` Web Push during
+    // device Doze / App Standby by 1 to 5 minutes, which is exactly the
+    // 3 minute delay Juan observed on the first live SOS test. Critical
+    // tiers (sos, fall_detection) and silent-acks (which close active
+    // alarms on peer phones) MUST arrive within seconds, so mark them
+    // `high` — same posture as the native Expo path already uses. Raise
+    // TTL on the same branch from 60 s to 300 s so a browser that wakes
+    // within the window still receives the notification instead of the
+    // push service dropping it. Non-critical tiers keep the tighter TTL
+    // and default urgency to preserve device battery.
+    const isCritical =
+      CRITICAL_TYPES.has(payload.type) || payload.type === 'silent_ack';
     await webPush.sendNotification(
       {
         endpoint: sub.endpoint,
         keys: { p256dh: sub.p256dh, auth: sub.auth },
       },
       JSON.stringify(payload),
-      { TTL: 60 },
+      isCritical
+        ? { TTL: 300, urgency: 'high' }
+        : { TTL: 60, urgency: 'normal' },
     );
     await prisma.pushSubscription.update({
       where: { id: sub.id },

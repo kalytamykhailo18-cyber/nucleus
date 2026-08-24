@@ -31,6 +31,26 @@ if [[ -r "$ENV_FILE" ]]; then
 fi
 
 E2E_BASE_URL="${E2E_BASE_URL:-https://app.sensu.com.mx}"
+
+# Refuse to seed against production. This script sprays password
+# rewrites at demo@ / admin@ / demo+esencial-* via /api/dev/seed-*.
+# Running it accidentally against app.sensu.com.mx would clobber real
+# customer credentials the same way create-callcenter-admin.mjs did
+# to the call-center account on 2026-08-21. Set
+# `ALLOW_PROD_SEED=iAmVeryVerySureAboutThis` to override — never do
+# that unless you know exactly which User rows are about to be
+# rewritten.
+case "$E2E_BASE_URL" in
+  *app.sensu.com.mx*|*sensu.com.mx*)
+    if [[ "${ALLOW_PROD_SEED:-}" != "iAmVeryVerySureAboutThis" ]]; then
+      printf '\033[31m✗ refusing to seed against prod (%s)\033[0m\n' "$E2E_BASE_URL" >&2
+      printf '  set E2E_BASE_URL=http://127.0.0.1:3000 for local, or the isolated test-stack URL for a redeploy.\n' >&2
+      printf '  bypass (dangerous — rewrites real customer passwords) with ALLOW_PROD_SEED=iAmVeryVerySureAboutThis\n' >&2
+      exit 1
+    fi
+    ;;
+esac
+
 SECRET="${E2E_HOOKS_SECRET:-}"
 EMAIL="${NUCLEUS_DEMO_EMAIL:-}"
 PASSWORD="${NUCLEUS_DEMO_PASSWORD:-}"

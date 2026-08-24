@@ -3,8 +3,15 @@
  * Nucleus — mint a dedicated call-center dispatcher account.
  *
  * Creates a User row with role=CALLCENTER, callcenterMode=true, and a
- * strong generated password. Idempotent on email: re-running for the
- * same address resets the password and re-asserts the flags.
+ * strong generated password.
+ *
+ * NOT silently idempotent on password. Re-running for an EXISTING email
+ * refuses to touch the row unless `--rotate-password` is passed, since
+ * that quiet rotation is what locked every dispatcher out of the
+ * call-center account on 2026-08-21 when the script was re-run just to
+ * look up the password. `--rotate-password` still overwrites — pass it
+ * only when every dispatcher who holds the current password is ready to
+ * pick up the new one from you the moment this exits.
  *
  * CALLCENTER role (Juan 2026-06-17) is narrower than ADMIN: lets the
  * dispatcher reach /admin/operator + /admin/check-ins + /admin/fleet
@@ -13,15 +20,23 @@
  * / /admin/marketing — those stay locked to ADMIN role only.
  *
  * Usage:
+ *   # create a brand-new dispatcher account:
  *   node scripts/create-callcenter-admin.mjs \
  *     --email dispatcher1@sensu.com.mx \
  *     --name "Dispatcher 1"
  *
- *   # explicit password (otherwise one is generated and printed):
+ *   # explicit password on create (otherwise one is generated and printed):
  *   node scripts/create-callcenter-admin.mjs \
  *     --email dispatcher1@sensu.com.mx \
  *     --name "Dispatcher 1" \
  *     --password 'somethingStrong'
+ *
+ *   # deliberately rotate the password on an existing row (locks out
+ *   # every dispatcher holding the previous copy — coordinate first):
+ *   node scripts/create-callcenter-admin.mjs \
+ *     --email dispatcher1@sensu.com.mx \
+ *     --name "Dispatcher 1" \
+ *     --rotate-password
  *
  * Run with DATABASE_URL pointing at 127.0.0.1:5432 (the host-published
  * port). Sourcing the repo-root .env picks it up automatically.
@@ -39,7 +54,7 @@ function hashPassword(password) {
 
 function parseArgs() {
   const argv = process.argv.slice(2);
-  const out = {};
+  const out = { rotate: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const val = argv[i + 1];
@@ -52,10 +67,12 @@ function parseArgs() {
     } else if (flag === '--password') {
       out.password = val;
       i++;
+    } else if (flag === '--rotate-password') {
+      out.rotate = true;
     }
   }
   if (!out.email || !out.name) {
-    console.error('usage: create-callcenter-admin --email <addr> --name <full name> [--password <pw>]');
+    console.error('usage: create-callcenter-admin --email <addr> --name <full name> [--password <pw>] [--rotate-password]');
     process.exit(2);
   }
   return out;
@@ -67,31 +84,59 @@ function generatePassword() {
 
 async function main() {
   const args = parseArgs();
-  const password = args.password ?? generatePassword();
-  const passwordHash = hashPassword(password);
   const prisma = new PrismaClient();
   try {
-    const user = await prisma.user.upsert({
+    const existing = await prisma.user.findUnique({
       where: { email: args.email },
-      create: {
-        email: args.email,
-        fullName: args.name,
-        passwordHash,
-        role: 'CALLCENTER',
-        callcenterMode: true,
-        kind: 'FAMILY',
-        isActive: true,
-      },
-      update: {
-        fullName: args.name,
-        passwordHash,
-        role: 'CALLCENTER',
-        callcenterMode: true,
-        isActive: true,
-      },
-      select: { id: true, email: true, role: true, callcenterMode: true },
+      select: { id: true, email: true, role: true, callcenterMode: true, fullName: true },
     });
-    console.log('✓ call-center admin ready');
+
+    if (existing && !args.rotate) {
+      console.error('');
+      console.error(`✗ user ${args.email} already exists (id=${existing.id}, role=${existing.role}).`);
+      console.error('  This script no longer silently rotates the password on re-runs — the previous idempotent behaviour locked every dispatcher out on 2026-08-21 when it was re-run just to look up the password.');
+      console.error('');
+      console.error('  If you only need to see the current state, query the DB directly:');
+      console.error(`    SELECT id, email, role, "callcenterMode", "isActive", "updatedAt" FROM "User" WHERE email='${args.email}';`);
+      console.error('');
+      console.error('  If you genuinely want to overwrite the password (and are ready to hand the new one to every dispatcher currently holding the old copy):');
+      console.error(`    node ${process.argv[1].split('/').pop()} --email ${args.email} --name "${existing.fullName}" --rotate-password`);
+      console.error('');
+      process.exit(3);
+    }
+
+    const password = args.password ?? generatePassword();
+    const passwordHash = hashPassword(password);
+
+    const user = existing
+      ? await prisma.user.update({
+          where: { email: args.email },
+          data: {
+            fullName: args.name,
+            passwordHash,
+            role: 'CALLCENTER',
+            callcenterMode: true,
+            isActive: true,
+          },
+          select: { id: true, email: true, role: true, callcenterMode: true },
+        })
+      : await prisma.user.create({
+          data: {
+            email: args.email,
+            fullName: args.name,
+            passwordHash,
+            role: 'CALLCENTER',
+            callcenterMode: true,
+            kind: 'FAMILY',
+            isActive: true,
+          },
+          select: { id: true, email: true, role: true, callcenterMode: true },
+        });
+
+    console.log(existing ? '✓ call-center admin password rotated' : '✓ call-center admin created');
+    if (existing) {
+      console.warn('  WARNING: every dispatcher holding the previous password is now locked out. Hand them the new password below immediately.');
+    }
     console.log(`  email:     ${user.email}`);
     console.log(`  password:  ${password}`);
     console.log(`  role:      ${user.role}`);

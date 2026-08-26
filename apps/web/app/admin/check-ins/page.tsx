@@ -146,14 +146,25 @@ export default async function AdminCheckInsPage({
                 : 'Hoy es fin de semana — no hay check-ins programados; los check-ins se asignan de lunes a viernes.'}
             </p>
           ) : (
-            <ul
-              data-testid="admin-check-ins-today-list"
-              className="mt-4 space-y-3"
-            >
-              {todayRows.map((r) => (
-                <Row key={r.userId} row={r} highlight />
-              ))}
-            </ul>
+            <>
+              <ul
+                data-testid="admin-check-ins-today-list"
+                className="mt-4 space-y-3"
+              >
+                {todayRows.slice(0, DAY_ROW_CAP).map((r) => (
+                  <Row key={r.userId} row={r} highlight />
+                ))}
+              </ul>
+              {todayRows.length > DAY_ROW_CAP && (
+                <p
+                  data-testid="admin-check-ins-today-overflow"
+                  className="mt-3 text-center text-xs text-zinc-500"
+                >
+                  Mostrando las primeras {DAY_ROW_CAP} de {todayRows.length}
+                  {' '}entradas.
+                </p>
+              )}
+            </>
           )}
         </section>
 
@@ -161,6 +172,7 @@ export default async function AdminCheckInsPage({
           const dayRows = byDay[day] ?? [];
           if (dayRows.length === 0) return null;
           if (day === today) return null;
+          const visible = dayRows.slice(0, DAY_ROW_CAP);
           return (
             <section key={day} className="mt-10">
               <SectionLabel icon={LuCalendarCheck} tone="sensu">
@@ -170,10 +182,18 @@ export default async function AdminCheckInsPage({
                 data-testid={`admin-check-ins-${day.toLowerCase()}`}
                 className="mt-4 space-y-3"
               >
-                {dayRows.map((r) => (
+                {visible.map((r) => (
                   <Row key={r.userId} row={r} />
                 ))}
               </ul>
+              {dayRows.length > DAY_ROW_CAP && (
+                <p
+                  data-testid={`admin-check-ins-${day.toLowerCase()}-overflow`}
+                  className="mt-3 text-center text-xs text-zinc-500"
+                >
+                  Mostrando las primeras {DAY_ROW_CAP} de {dayRows.length} entradas.
+                </p>
+              )}
             </section>
           );
         })}
@@ -181,6 +201,13 @@ export default async function AdminCheckInsPage({
     </main>
   );
 }
+
+// Ustym 2026-08-26: cap each day's visible list at 20 rows so the
+// page never grows past a handful of screen heights. Overflow renders
+// an "and N more" note. The customer base with check-in enabled is
+// small today; when a single day sustainedly exceeds 20 rows we
+// upgrade the section to full per-day pagination.
+const DAY_ROW_CAP = 20;
 
 const DAY_ORDER: CheckInDay[] = [
   'MONDAY',

@@ -1,10 +1,17 @@
 import { LuUsersRound } from 'react-icons/lu';
 import { SectionLabel } from '@/components/section-label';
+import { PaginationNav } from '@/components/pagination-nav';
 import { prisma } from '@/lib/db';
 import { requireAdmin } from '@/lib/admin';
 import { AdminSalesRepsClient } from './admin-sales-reps-client';
 
 export const dynamic = 'force-dynamic';
+
+// Ustym 2026-08-26: paginate at 25 per page. Sales-rep table is small
+// today (< 20 reps), but the rule is prevent-not-react — this is on
+// the list of surfaces that must stay short even as the rep base
+// grows into the dozens. Top+bottom nav enforced.
+const PAGE_SIZE = 25;
 
 /**
  * Sales-rep roster + commission attribution panel (Juan 2026-07-30
@@ -17,10 +24,21 @@ export const dynamic = 'force-dynamic';
  * Deactivating a rep stops new attributions but preserves historical
  * ones on Subscription rows so commission runs stay stable.
  */
-export default async function AdminSalesRepsPage(): Promise<React.ReactElement> {
+export default async function AdminSalesRepsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}): Promise<React.ReactElement> {
   await requireAdmin();
+  const sp = await searchParams;
+  const requestedPage = Math.max(parseInt(sp.page ?? '1', 10) || 1, 1);
+  const totalRows = await prisma.salesRep.count();
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  const safePage = Math.min(requestedPage, totalPages);
   const reps = await prisma.salesRep.findMany({
     orderBy: [{ active: 'desc' }, { name: 'asc' }],
+    take: PAGE_SIZE,
+    skip: (safePage - 1) * PAGE_SIZE,
     select: {
       id: true,
       slug: true,
@@ -55,7 +73,35 @@ export default async function AdminSalesRepsPage(): Promise<React.ReactElement> 
           su enlace deja de asignar nuevas ventas.
         </p>
 
+        {totalPages > 1 && (
+          <div className="mt-6 flex justify-center">
+            <PaginationNav
+              currentPage={safePage}
+              totalPages={totalPages}
+              totalRows={totalRows}
+              pageSize={PAGE_SIZE}
+              baseHref="/admin/sales-reps"
+              testIdPrefix="admin-sales-reps-pagination"
+              position="top"
+            />
+          </div>
+        )}
+
         <AdminSalesRepsClient initialReps={reps} />
+
+        {totalPages > 1 && (
+          <div className="mt-6 flex justify-center">
+            <PaginationNav
+              currentPage={safePage}
+              totalPages={totalPages}
+              totalRows={totalRows}
+              pageSize={PAGE_SIZE}
+              baseHref="/admin/sales-reps"
+              testIdPrefix="admin-sales-reps-pagination"
+              position="bottom"
+            />
+          </div>
+        )}
       </div>
     </main>
   );

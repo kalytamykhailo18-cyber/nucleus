@@ -10,6 +10,7 @@ import {
 } from 'react-icons/lu';
 import { auth } from '@/auth';
 import { SectionLabel } from '@/components/section-label';
+import { PaginationNav } from '@/components/pagination-nav';
 import { prisma } from '@/lib/db';
 import {
   fetchCompanyAdminContext,
@@ -24,7 +25,17 @@ import { PushToggle } from '@/components/push-toggle';
 
 export const dynamic = 'force-dynamic';
 
-export default async function CompanyDashboardPage(): Promise<React.ReactElement> {
+// Members roster paginates at 20 per page on the customer HR dashboard
+// (Ustym 2026-08-26). Managed-fleet customers can carry 100+ workers;
+// rendering all of them as expanded MemberCard rows produced a 10+
+// screen page. Top+bottom pagination is enforced on this list.
+const MEMBERS_PAGE_SIZE = 20;
+
+export default async function CompanyDashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}): Promise<React.ReactElement> {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect('/login?next=%2Fcompany');
@@ -32,7 +43,19 @@ export default async function CompanyDashboardPage(): Promise<React.ReactElement
   const ctx = await fetchCompanyAdminContext(userId);
   if (!ctx) redirect('/dashboard');
 
+  const params = await searchParams;
+  const requestedPage = Math.max(parseInt(params.page ?? '1', 10) || 1, 1);
+
   const { company, members } = ctx;
+  const membersTotalPages = Math.max(
+    1,
+    Math.ceil(members.length / MEMBERS_PAGE_SIZE),
+  );
+  const membersPage = Math.min(requestedPage, membersTotalPages);
+  const membersOnPage = members.slice(
+    (membersPage - 1) * MEMBERS_PAGE_SIZE,
+    membersPage * MEMBERS_PAGE_SIZE,
+  );
   const alertingMembers = members.filter((m) => m.recentAlertCount > 0).length;
 
   // Industrial-fleet rail: load the shared roster so the HR lead can
@@ -246,14 +269,42 @@ export default async function CompanyDashboardPage(): Promise<React.ReactElement
               empresas.
             </p>
           ) : (
-            <ul
-              data-testid="company-members-list"
-              className="mt-4 space-y-3"
-            >
-              {members.map((m) => (
-                <MemberCard key={m.membershipId} member={m} />
-              ))}
-            </ul>
+            <>
+              {membersTotalPages > 1 && (
+                <div className="mt-4 flex justify-center">
+                  <PaginationNav
+                    currentPage={membersPage}
+                    totalPages={membersTotalPages}
+                    totalRows={members.length}
+                    pageSize={MEMBERS_PAGE_SIZE}
+                    baseHref="/company"
+                    testIdPrefix="company-members-pagination"
+                    position="top"
+                  />
+                </div>
+              )}
+              <ul
+                data-testid="company-members-list"
+                className="mt-4 space-y-3"
+              >
+                {membersOnPage.map((m) => (
+                  <MemberCard key={m.membershipId} member={m} />
+                ))}
+              </ul>
+              {membersTotalPages > 1 && (
+                <div className="mt-6 flex justify-center">
+                  <PaginationNav
+                    currentPage={membersPage}
+                    totalPages={membersTotalPages}
+                    totalRows={members.length}
+                    pageSize={MEMBERS_PAGE_SIZE}
+                    baseHref="/company"
+                    testIdPrefix="company-members-pagination"
+                    position="bottom"
+                  />
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>

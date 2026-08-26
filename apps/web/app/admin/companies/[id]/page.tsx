@@ -11,6 +11,7 @@ import {
   LuUsers,
 } from 'react-icons/lu';
 import { SectionLabel } from '@/components/section-label';
+import { PaginationNav } from '@/components/pagination-nav';
 import { requireAdmin } from '@/lib/admin';
 import { prisma } from '@/lib/db';
 import {
@@ -19,6 +20,13 @@ import {
 } from '@/lib/companies';
 
 export const dynamic = 'force-dynamic';
+
+// Ustym 2026-08-26: members list paginates at 20 per page — Medtronic
+// alone carries 22 workers today and the industrial-fleet customers
+// are the ones expected to grow past 100. Top+bottom pagination
+// enforced. sharedContacts is capped at 3 per Sensu policy so no
+// pagination needed there.
+const MEMBERS_PAGE_SIZE = 20;
 
 /**
  * /admin/companies/[id]
@@ -31,17 +39,30 @@ export const dynamic = 'force-dynamic';
  */
 export default async function AdminCompanyDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ page?: string }>;
 }): Promise<React.ReactElement> {
   await requireAdmin();
   const { id } = await params;
+  const search = await searchParams;
+  const requestedPage = Math.max(parseInt(search.page ?? '1', 10) || 1, 1);
 
   const ctx = await fetchCompanyContextById(id);
   if (!ctx) notFound();
 
   const { company, members } = ctx;
   const alertingMembers = members.filter((m) => m.recentAlertCount > 0).length;
+  const membersTotalPages = Math.max(
+    1,
+    Math.ceil(members.length / MEMBERS_PAGE_SIZE),
+  );
+  const membersPage = Math.min(requestedPage, membersTotalPages);
+  const membersOnPage = members.slice(
+    (membersPage - 1) * MEMBERS_PAGE_SIZE,
+    membersPage * MEMBERS_PAGE_SIZE,
+  );
 
   const sharedContacts = company.isManagedFleet
     ? await prisma.companyEmergencyContact.findMany({
@@ -189,14 +210,42 @@ export default async function AdminCompanyDetailPage({
               Esta empresa todavía no tiene trabajadores.
             </p>
           ) : (
-            <ul
-              data-testid="admin-company-members"
-              className="mt-4 space-y-3"
-            >
-              {members.map((m) => (
-                <MemberCard key={m.membershipId} member={m} />
-              ))}
-            </ul>
+            <>
+              {membersTotalPages > 1 && (
+                <div className="mt-4 flex justify-center">
+                  <PaginationNav
+                    currentPage={membersPage}
+                    totalPages={membersTotalPages}
+                    totalRows={members.length}
+                    pageSize={MEMBERS_PAGE_SIZE}
+                    baseHref={`/admin/companies/${company.id}`}
+                    testIdPrefix="admin-company-members-pagination"
+                    position="top"
+                  />
+                </div>
+              )}
+              <ul
+                data-testid="admin-company-members"
+                className="mt-4 space-y-3"
+              >
+                {membersOnPage.map((m) => (
+                  <MemberCard key={m.membershipId} member={m} />
+                ))}
+              </ul>
+              {membersTotalPages > 1 && (
+                <div className="mt-6 flex justify-center">
+                  <PaginationNav
+                    currentPage={membersPage}
+                    totalPages={membersTotalPages}
+                    totalRows={members.length}
+                    pageSize={MEMBERS_PAGE_SIZE}
+                    baseHref={`/admin/companies/${company.id}`}
+                    testIdPrefix="admin-company-members-pagination"
+                    position="bottom"
+                  />
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>

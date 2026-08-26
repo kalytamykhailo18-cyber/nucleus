@@ -8,11 +8,20 @@ import {
   LuTruck,
 } from 'react-icons/lu';
 import { SectionLabel } from '@/components/section-label';
+import { PaginationNav } from '@/components/pagination-nav';
 import { requireAdmin } from '@/lib/admin';
-import { fetchFunnelHealth } from '@/lib/funnel-health';
+import {
+  fetchFunnelHealth,
+  FUNNEL_SECTION_PAGE_SIZE,
+} from '@/lib/funnel-health';
 import { ResendWelcomeButton } from '../registrations/resend-welcome-button';
 
 export const dynamic = 'force-dynamic';
+
+function pageParam(v: string | undefined): number {
+  const n = parseInt(v ?? '1', 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
 
 function formatPesos(centavos: number): string {
   if (centavos === 0) return '$0';
@@ -46,9 +55,42 @@ function formatRelative(unit: 'd' | 'h', n: number): string {
  * so spec / debug accounts do not pollute the operations view. No
  * lenient cookie path: this surface is for production use only.
  */
-export default async function AdminFunnelPage(): Promise<React.ReactElement> {
+export default async function AdminFunnelPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    pend_page?: string;
+    nodev_page?: string;
+    silent_page?: string;
+  }>;
+}): Promise<React.ReactElement> {
   await requireAdmin();
-  const health = await fetchFunnelHealth();
+  const sp = await searchParams;
+  const pendingPage = pageParam(sp.pend_page);
+  const noDevicePage = pageParam(sp.nodev_page);
+  const silentPage = pageParam(sp.silent_page);
+  const health = await fetchFunnelHealth({
+    pendingPage,
+    noDevicePage,
+    silentPage,
+  });
+
+  // Section pagination bar helper. Each section owns an independent
+  // page param so navigating the "silent" list does not scroll
+  // "pending" back to page 1. baseHref carries the other two sections'
+  // current pages so the reader stays where they were.
+  function sectionHref(
+    param: 'pend_page' | 'nodev_page' | 'silent_page',
+  ): string {
+    const carry = new URLSearchParams();
+    if (param !== 'pend_page' && pendingPage !== 1) carry.set('pend_page', String(pendingPage));
+    if (param !== 'nodev_page' && noDevicePage !== 1) carry.set('nodev_page', String(noDevicePage));
+    if (param !== 'silent_page' && silentPage !== 1) carry.set('silent_page', String(silentPage));
+    return carry.size ? `/admin/funnel?${carry.toString()}` : '/admin/funnel';
+  }
+  const pendingTotalPages = Math.max(1, Math.ceil(health.pendingQuestionnaireTotal / FUNNEL_SECTION_PAGE_SIZE));
+  const noDeviceTotalPages = Math.max(1, Math.ceil(health.noDeviceTotal / FUNNEL_SECTION_PAGE_SIZE));
+  const silentTotalPages = Math.max(1, Math.ceil(health.silentDevicesTotal / FUNNEL_SECTION_PAGE_SIZE));
 
   return (
     <main
@@ -115,6 +157,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
             text="Nadie pendiente más de 24 horas. La pipeline está limpia."
           />
         ) : (
+          <>
+          {pendingTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={pendingPage}
+                totalPages={pendingTotalPages}
+                totalRows={health.pendingQuestionnaireTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('pend_page')}
+                pageParam="pend_page"
+                testIdPrefix="admin-funnel-pending-pagination"
+                position="top"
+              />
+            </div>
+          )}
           <ul
             data-testid="admin-funnel-pending-list"
             className="mt-3 space-y-2"
@@ -138,6 +195,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
               </li>
             ))}
           </ul>
+          {pendingTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={pendingPage}
+                totalPages={pendingTotalPages}
+                totalRows={health.pendingQuestionnaireTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('pend_page')}
+                pageParam="pend_page"
+                testIdPrefix="admin-funnel-pending-pagination"
+                position="bottom"
+              />
+            </div>
+          )}
+          </>
         )}
 
         {/* No device assigned ---------------------------------------- */}
@@ -156,6 +228,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
             text="Todos los suscriptores activos tienen al menos un dispositivo enlazado."
           />
         ) : (
+          <>
+          {noDeviceTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={noDevicePage}
+                totalPages={noDeviceTotalPages}
+                totalRows={health.noDeviceTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('nodev_page')}
+                pageParam="nodev_page"
+                testIdPrefix="admin-funnel-no-device-pagination"
+                position="top"
+              />
+            </div>
+          )}
           <ul
             data-testid="admin-funnel-no-device-list"
             className="mt-3 space-y-2"
@@ -187,6 +274,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
               </li>
             ))}
           </ul>
+          {noDeviceTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={noDevicePage}
+                totalPages={noDeviceTotalPages}
+                totalRows={health.noDeviceTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('nodev_page')}
+                pageParam="nodev_page"
+                testIdPrefix="admin-funnel-no-device-pagination"
+                position="bottom"
+              />
+            </div>
+          )}
+          </>
         )}
 
         {/* Silent devices -------------------------------------------- */}
@@ -205,6 +307,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
             text="Todos los dispositivos activos reportaron en las últimas 48 horas."
           />
         ) : (
+          <>
+          {silentTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={silentPage}
+                totalPages={silentTotalPages}
+                totalRows={health.silentDevicesTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('silent_page')}
+                pageParam="silent_page"
+                testIdPrefix="admin-funnel-silent-pagination"
+                position="top"
+              />
+            </div>
+          )}
           <ul
             data-testid="admin-funnel-silent-list"
             className="mt-3 space-y-2"
@@ -239,6 +356,21 @@ export default async function AdminFunnelPage(): Promise<React.ReactElement> {
               </li>
             ))}
           </ul>
+          {silentTotalPages > 1 && (
+            <div className="mt-3 flex justify-center">
+              <PaginationNav
+                currentPage={silentPage}
+                totalPages={silentTotalPages}
+                totalRows={health.silentDevicesTotal}
+                pageSize={FUNNEL_SECTION_PAGE_SIZE}
+                baseHref={sectionHref('silent_page')}
+                pageParam="silent_page"
+                testIdPrefix="admin-funnel-silent-pagination"
+                position="bottom"
+              />
+            </div>
+          )}
+          </>
         )}
       </div>
     </main>

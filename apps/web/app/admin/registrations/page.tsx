@@ -10,7 +10,12 @@ import { cadenceLabel, type BillingCadence } from '@/lib/plans';
 import { CrearDemoButton } from './crear-demo-button';
 import { LuFilter, LuFilterX } from 'react-icons/lu';
 
-const PAGE_SIZE = 50;
+// Shrunk 50 → 25 on 2026-08-26 after the audit-page long-page sweep;
+// mobile card render turns 50 rows into a 15+ screen page and every
+// next-page click forced a full scroll. Top+bottom pagination is
+// already in place, so the smaller size cuts height without hiding
+// content behind extra clicks in an unreasonable way.
+const PAGE_SIZE = 25;
 
 const STATUS_TONE: Record<string, string> = {
   ACTIVE: 'bg-emerald-50 text-emerald-700 ring-emerald-200',

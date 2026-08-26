@@ -62,11 +62,28 @@ export interface FunnelHealth {
   silentDevicesTotal: number;
 }
 
-const SECTION_CAP = 50;
+// 20 rows per section per page (Ustym 2026-08-26); 3 sections at 50
+// each rendered a 10+ screen page and silently truncated at 51+ rows.
+// Callers pass per-section page numbers via `pages` so the page can
+// navigate each section independently.
+export const FUNNEL_SECTION_PAGE_SIZE = 20;
 const SILENT_THRESHOLD_MS = 48 * 60 * 60 * 1_000;
 const PENDING_THRESHOLD_MS = 24 * 60 * 60 * 1_000;
 
-export async function fetchFunnelHealth(): Promise<FunnelHealth> {
+export interface FunnelPageInput {
+  pendingPage?: number;
+  noDevicePage?: number;
+  silentPage?: number;
+}
+
+function skipFor(page: number | undefined): number {
+  const p = Math.max(1, page ?? 1);
+  return (p - 1) * FUNNEL_SECTION_PAGE_SIZE;
+}
+
+export async function fetchFunnelHealth(
+  pages: FunnelPageInput = {},
+): Promise<FunnelHealth> {
   const now = Date.now();
   const pendingCutoff = new Date(now - PENDING_THRESHOLD_MS);
   const silentCutoff = new Date(now - SILENT_THRESHOLD_MS);
@@ -85,7 +102,8 @@ export async function fetchFunnelHealth(): Promise<FunnelHealth> {
           },
         },
         orderBy: { createdAt: 'asc' },
-        take: SECTION_CAP,
+        take: FUNNEL_SECTION_PAGE_SIZE,
+        skip: skipFor(pages.pendingPage),
         select: {
           id: true,
           createdAt: true,
@@ -115,7 +133,8 @@ export async function fetchFunnelHealth(): Promise<FunnelHealth> {
           },
         },
         orderBy: { createdAt: 'asc' },
-        take: SECTION_CAP,
+        take: FUNNEL_SECTION_PAGE_SIZE,
+        skip: skipFor(pages.noDevicePage),
         select: {
           id: true,
           createdAt: true,
@@ -149,7 +168,8 @@ export async function fetchFunnelHealth(): Promise<FunnelHealth> {
           ],
         },
         orderBy: { createdAt: 'asc' },
-        take: SECTION_CAP,
+        take: FUNNEL_SECTION_PAGE_SIZE,
+        skip: skipFor(pages.silentPage),
         select: {
           deviceId: true,
           deviceName: true,

@@ -7,15 +7,18 @@ import { fetchAdminAuditLog } from '@/lib/admin-audit';
 
 export const dynamic = 'force-dynamic';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 20;
 
 /**
  * /admin/audit — admin-action audit trail (Phase C #4, 2026-06-15).
  *
  * Read-only ledger of every mutation we wired through `logAdminAction`.
  * Filters: action prefix (e.g. "company"), actor email, target type +
- * id. Pagination at 50 rows. No write endpoints; the log is append-only
- * by design.
+ * id. Pagination at 20 rows (dropped from 50 on 2026-08-26 after each
+ * row's expanded metadata pushed the page past 10 screen heights).
+ * Metadata now collapses into a `<details>` so a page of 20 rows fits
+ * inside one screen unless the operator opens each row deliberately.
+ * No write endpoints; the log is append-only by design.
  */
 export default async function AdminAuditPage({
   searchParams,
@@ -105,7 +108,21 @@ export default async function AdminAuditPage({
             Sin entradas en el registro con esos filtros.
           </p>
         ) : (
-          <ul
+          <>
+          {totalPages > 1 && (
+            <div className="mt-6 flex justify-center">
+              <PaginationNav
+                currentPage={page}
+                totalPages={totalPages}
+                totalRows={total}
+                pageSize={pageSize}
+                baseHref={baseHref}
+                testIdPrefix="admin-audit-pagination"
+                position="top"
+              />
+            </div>
+          )}
+            <ul
             data-testid="admin-audit-list"
             className="mt-6 space-y-2"
           >
@@ -143,30 +160,38 @@ export default async function AdminAuditPage({
                   </div>
                 </div>
                 {r.metadata !== null && r.metadata !== undefined && (
-                  <pre
-                    data-testid={`admin-audit-row-${r.id}-metadata`}
-                    className="mt-2 max-h-40 overflow-auto rounded-xl bg-zinc-50 p-3 text-[11px] leading-snug text-zinc-700 ring-1 ring-zinc-100 font-mono"
+                  <details
+                    data-testid={`admin-audit-row-${r.id}-metadata-toggle`}
+                    className="group mt-2"
                   >
-                    {JSON.stringify(r.metadata, null, 2)}
-                  </pre>
+                    <summary className="cursor-pointer select-none text-[11px] text-zinc-500 hover:text-zinc-800 group-open:text-zinc-800">
+                      Ver payload
+                    </summary>
+                    <pre
+                      data-testid={`admin-audit-row-${r.id}-metadata`}
+                      className="mt-2 max-h-64 overflow-auto rounded-xl bg-zinc-50 p-3 text-[11px] leading-snug text-zinc-700 ring-1 ring-zinc-100 font-mono"
+                    >
+                      {JSON.stringify(r.metadata, null, 2)}
+                    </pre>
+                  </details>
                 )}
               </li>
             ))}
           </ul>
-        )}
-
-        {totalPages > 1 && (
-          <div className="mt-6 flex justify-center">
-            <PaginationNav
-              currentPage={page}
-              totalPages={totalPages}
-              totalRows={total}
-              pageSize={pageSize}
-              baseHref={baseHref}
-              testIdPrefix="admin-audit-pagination"
-              position="bottom"
-            />
-          </div>
+          {totalPages > 1 && (
+            <div className="mt-6 flex justify-center">
+              <PaginationNav
+                currentPage={page}
+                totalPages={totalPages}
+                totalRows={total}
+                pageSize={pageSize}
+                baseHref={baseHref}
+                testIdPrefix="admin-audit-pagination"
+                position="bottom"
+              />
+            </div>
+          )}
+          </>
         )}
       </div>
     </main>

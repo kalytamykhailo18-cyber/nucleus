@@ -74,6 +74,20 @@ export default async function AdminCompaniesPage({
           dispositivo.
         </p>
 
+        {companies.totalPages > 1 && (
+          <div className="mt-6">
+            <PaginationNav
+              currentPage={companies.page}
+              totalPages={companies.totalPages}
+              totalRows={companies.totalRows}
+              pageSize={companies.pageSize}
+              baseHref={`/admin/companies${strictView ? '' : '?vista=all'}`}
+              testIdPrefix="admin-companies-pagination"
+              position="top"
+            />
+          </div>
+        )}
+
         <AdminCompaniesClient initialCompanies={companies.rows} />
 
         {companies.totalPages > 1 && (

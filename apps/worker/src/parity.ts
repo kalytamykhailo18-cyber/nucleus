@@ -1,14 +1,15 @@
 import type { PrismaClient } from '@prisma/client';
 
 /**
- * Step 14 — record what the TS subscriber classified for every incoming
- * MQTT message, alongside the EviewEvent it produced (or null if the
- * save was deduped / failed). The /api/admin/parity endpoint then diffs
- * these rows against equivalent observations from the Python subscriber
- * during the 7-day parity window.
+ * Retired 2026-08-26. Phase A parity closed with 0 divergences across
+ * 3.5 months of observation (verified against `WorkerParityCheck`).
+ * Kept writing rows anyway ballooned the table to 518,876 rows and
+ * ~161 MB, all of it pure diagnostic scaffolding — the actual event
+ * data lives in `EviewEvent` and was never at risk. Truncated the
+ * table and turned this function into a no-op so the DB stays clean.
  *
- * Best-effort: a parity-write failure must never break the actual event
- * pipeline, so callers should swallow exceptions and log.
+ * Function signature preserved so existing call sites (worker index.ts)
+ * compile without change.
  */
 export interface ParityObservation {
   eviewDeviceId: string;
@@ -23,24 +24,9 @@ export interface ParityObservation {
 }
 
 export async function recordParityCheck(
-  prisma: PrismaClient,
-  source: 'TS' | 'PYTHON',
-  obs: ParityObservation,
+  _prisma: PrismaClient,
+  _source: 'TS' | 'PYTHON',
+  _obs: ParityObservation,
 ): Promise<void> {
-  await prisma.workerParityCheck.create({
-    data: {
-      source,
-      eviewDeviceId: obs.eviewDeviceId,
-      eventType: obs.eventType,
-      timestamp: obs.timestamp,
-      statusCode: obs.statusCode,
-      alarmCode: obs.alarmCode,
-      batteryLevel: obs.batteryLevel,
-      lat: obs.lat,
-      lng: obs.lng,
-      eviewEventId: obs.eviewEventId,
-      divergent: false,
-      divergenceDetails: undefined,
-    },
-  });
+  // no-op — see file docstring
 }

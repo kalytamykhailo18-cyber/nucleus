@@ -47,15 +47,6 @@ export async function fetchCompanyById(id: string): Promise<CompanySummary | nul
  * opts back into the unfiltered view (Playwright session sets a
  * cookie so spec assertions keep firing against seeded rows).
  */
-// 2026-06-29 follow-up (Juan): the managed-fleet spec churn from
-// 2026-06-26 onward seeded "UI Industrial", "OpUI Industrial",
-// "HR-Lead UI" rows whose names matched none of the existing tokens.
-// Every spec-generated company carries a `${Date.now().toString(36)}`
-// cuid-style suffix (always starts with " mq" in 2026), so adding
-// the leading-space ' mq' token catches them all — past, present,
-// and any future spec that forgets to include a literal blocked
-// token in the name. Real Spanish/English customer names virtually
-// never contain a " mq" sequence; acceptable false-positive risk.
 const DEMO_COMPANY_NAME_TOKENS = [
   'acme',
   'demo',
@@ -63,8 +54,26 @@ const DEMO_COMPANY_NAME_TOKENS = [
   'spec',
   'test',
   'fixture',
-  ' mq',
 ];
+
+// The hardcoded base36 timestamp prefix (originally " mq" for June
+// 2026, then " ms"/" mt" for August 2026) needed a manual update every
+// few months as Date.now().toString(36) rolled forward. On 2026-08-26
+// the accumulated pollution reached 626 spec rows against 1 real
+// customer (Medtronic), buried the real customer completely, and Juan
+// hit it. Switching to a suffix-shape regex catches every spec Company
+// past, present, and future without needing to enumerate prefixes.
+// Any Playwright fixture that uses `Date.now().toString(36)` as its
+// cuid-style suffix (which every managed-fleet, industrial, and
+// solo-member spec does) is caught. Real customer names never end in
+// a bare 6-to-10-character base36 token after a space.
+const DEMO_COMPANY_SUFFIX_PATTERN = /\s[a-z0-9]{6,10}$/i;
+
+function isDemoName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (DEMO_COMPANY_NAME_TOKENS.some((t) => lower.includes(t))) return true;
+  return DEMO_COMPANY_SUFFIX_PATTERN.test(name);
+}
 
 export interface PaginatedCompanies {
   rows: CompanySummary[];
@@ -87,30 +96,58 @@ export async function fetchCompanies(
   const pageSize = options.pageSize ?? 25;
   const requestedPage = Math.max(1, options.page ?? 1);
 
-  // Prisma's `name: { not: { contains, mode } }` shape rejects `mode`
-  // inside the nested `not` clause (validator error at runtime). Wrap
-  // each demo-token filter in a top-level `NOT` so the case-
-  // insensitive flag lives next to `contains` where Prisma accepts it.
-  const nameExclusions = options.strict
-    ? DEMO_COMPANY_NAME_TOKENS.map((token) => ({
-        NOT: { name: { contains: token, mode: 'insensitive' as const } },
-      }))
-    : [];
-  const where = nameExclusions.length ? { AND: nameExclusions } : {};
+  if (!options.strict) {
+    // Lenient view: Prisma-side pagination as before, no exclusions.
+    const totalRows = await prisma.company.count();
+    const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+    const safePage = Math.min(requestedPage, totalPages);
+    const rows = await prisma.company.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { memberships: { select: { role: true } } },
+      take: pageSize,
+      skip: (safePage - 1) * pageSize,
+    });
+    return {
+      rows: rows.map(summarize),
+      totalRows,
+      totalPages,
+      page: safePage,
+      pageSize,
+    };
+  }
 
-  const totalRows = await prisma.company.count({ where });
+  // Strict view: the suffix-shape check is a regex on the name and
+  // cannot run inside a Prisma `where`, so we pull ids + names first
+  // (a lightweight scan), decide in JS which pass the strict filter,
+  // then paginate the survivor set and hydrate the visible page.
+  // Fast because the projection is tiny; the Company table stays
+  // manageable once the accumulated fixture pollution is cleaned.
+  const candidates = await prisma.company.findMany({
+    select: { id: true, name: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const survivorIds = candidates
+    .filter((c) => !isDemoName(c.name))
+    .map((c) => c.id);
+  const totalRows = survivorIds.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
   const safePage = Math.min(requestedPage, totalPages);
+  const pageIds = survivorIds.slice(
+    (safePage - 1) * pageSize,
+    safePage * pageSize,
+  );
   const rows = await prisma.company.findMany({
-    where,
-    orderBy: { createdAt: 'desc' },
+    where: { id: { in: pageIds } },
     include: { memberships: { select: { role: true } } },
-    take: pageSize,
-    skip: (safePage - 1) * pageSize,
   });
+  // Preserve the createdAt-desc order the survivor scan established.
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const orderedRows = pageIds
+    .map((id) => byId.get(id))
+    .filter((r): r is (typeof rows)[number] => r !== undefined);
 
   return {
-    rows: rows.map(summarize),
+    rows: orderedRows.map(summarize),
     totalRows,
     totalPages,
     page: safePage,

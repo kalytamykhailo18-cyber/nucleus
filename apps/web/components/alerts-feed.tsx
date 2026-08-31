@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   LuBatteryLow,
   LuChevronDown,
@@ -25,10 +25,17 @@ import { formatLastSeen } from '@/lib/format-last-seen';
  * server-truth is what survives a refresh (the page revalidates on
  * mount via fetch).
  *
- * No polling — alerts are rare enough that on-demand refresh + a future
- * web push (step 9) are the right pattern. Adding a 5s poll here would
- * just hammer Postgres for nothing.
+ * Polls the first page every 30 seconds and refetches on visibility
+ * change (app foregrounded, tab focus). The earlier "no polling" stance
+ * assumed push notifications would keep the feed fresh — but pushes
+ * only fire when the app is closed; when the family member is looking
+ * at the dashboard, the OS suppresses the notification and the feed
+ * had no other refresh signal. Juan hit the exact gap on 2026-08-31
+ * where an SOS took ~5 minutes to appear because the tab was open the
+ * whole time. 30-second polling + visibility refetch closes that gap
+ * without hammering Postgres (one indexed query on a tiny page).
  */
+const REFETCH_INTERVAL_MS = 30_000;
 
 const TYPE_LABEL: Record<AlertEventType, string> = {
   sos: 'SOS',
@@ -83,6 +90,55 @@ export function AlertsFeed({
   const [loadingMore, setLoadingMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const open = openId ? alerts.find((a) => a.id === openId) ?? null : null;
+
+  // Refresh the first page in place. Merges the server response with the
+  // in-memory list so an unread alert the user just tapped stays read
+  // (server read-state may lag a heartbeat behind the local optimistic
+  // update). Only touches the top page; pagination cursors below are
+  // untouched.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+
+    async function refetch(): Promise<void> {
+      try {
+        const res = await fetch('/api/alerts', { cache: 'no-store' });
+        if (!res.ok) return;
+        const page = (await res.json()) as AlertsPage;
+        if (cancelled) return;
+        setAlerts((prev) => {
+          const readIds = new Set(
+            prev.filter((a) => a.read).map((a) => a.id),
+          );
+          const merged = page.alerts.map((a) =>
+            readIds.has(a.id) ? { ...a, read: true } : a,
+          );
+          // Preserve any older-than-first-page rows the user already
+          // paginated into. Keep them appended after the fresh top page.
+          const freshIds = new Set(merged.map((a) => a.id));
+          const paginatedTail = prev.filter((a) => !freshIds.has(a.id));
+          return [...merged, ...paginatedTail];
+        });
+      } catch {
+        // Network blip — leave the current state alone.
+      }
+    }
+
+    function onVisibility(): void {
+      if (document.visibilityState === 'visible') void refetch();
+    }
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refetch();
+    }, REFETCH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   async function markRead(id: string): Promise<void> {
     setAlerts((prev) =>
